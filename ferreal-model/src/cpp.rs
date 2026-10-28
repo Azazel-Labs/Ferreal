@@ -7,9 +7,11 @@
 //! });
 //! ```
 //!
-//! The captures are Rust variables, typed as Ferreal passes them (see [`crate::ty`]); in the
-//! C++ they are variables of the same names holding the C++ values (`AActor* actor`,
-//! `int32 times`, `FString` for strings). The block is the body of a C++ function returning
+//! The captures are Rust variables, typed as Ferreal passes them (see [`crate::ty`]), or of
+//! the engine structs and enums the bindings generate (`engine::HitResult`), `Rotator`, `Quat`
+//! and `Transform`; in the C++ they are variables of the same names holding the C++ values
+//! (`AActor* actor`, `int32 times`, `FString` for strings, `FHitResult hit`; engine enums as
+//! their integers). The block is the body of a C++ function returning
 //! the C++ value of the `-> Type` (nothing without one).
 //!
 //! Both halves find a block by its [`key`]: a hash of its tokens, so identical blocks share a
@@ -26,6 +28,8 @@ use crate::ty::{Ty, Use};
 pub struct CppBlock {
     pub captures: Vec<Capture>,
     pub ret: Ty,
+    /// The return type as written (none for `()`).
+    pub ret_rust_ty: Option<syn::Type>,
     pub body: CppBody,
 }
 
@@ -71,11 +75,12 @@ impl Parse for CppBlock {
             }
             content.parse::<syn::Token![,]>()?;
         }
-        let ret = if input.peek(syn::Token![->]) {
+        let (ret, ret_rust_ty) = if input.peek(syn::Token![->]) {
             input.parse::<syn::Token![->]>()?;
-            Ty::parse(&input.parse()?, Use::Return)?
+            let t: syn::Type = input.parse()?;
+            (Ty::parse(&t, Use::Return)?, Some(t))
         } else {
-            Ty::Unit
+            (Ty::Unit, None)
         };
         let body = if input.peek(syn::LitStr) {
             CppBody::Text(input.parse()?)
@@ -95,6 +100,7 @@ impl Parse for CppBlock {
         Ok(CppBlock {
             captures,
             ret,
+            ret_rust_ty,
             body,
         })
     }

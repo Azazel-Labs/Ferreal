@@ -52,8 +52,51 @@ pub struct Metadata {
     pub version: u32,
     #[serde(default)]
     pub classes: Vec<ClassMeta>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub structs: Vec<StructMeta>,
     #[serde(default)]
     pub enums: Vec<EnumMeta>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct StructMeta {
+    /// `FHitResult`.
+    pub cpp: String,
+    /// `/Script/Engine.HitResult`.
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub module: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    #[serde(rename = "super", default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Declared to Unreal Header Tool apart from its real C++ (the core math types), whose
+    /// fields may not be as declared.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub noexport: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
+    #[serde(default)]
+    pub fields: Vec<FieldMeta>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct FieldMeta {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: TypeMeta,
+    #[serde(rename = "public", default, skip_serializing_if = "is_false")]
+    pub is_public: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub editor_only: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub deprecated: bool,
+    /// `float Values[4]`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fixed_array: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -236,8 +279,199 @@ enum PTy {
     Vector2D,
     LinearColor,
     Rotator,
+    Quat,
+    Transform,
     /// An object of this C++ class.
     Obj(String),
+    /// A struct, by its C++ name, copied field by field (see [`StructPlan`]).
+    Struct(String),
+    /// A weak pointer to an object of this C++ class (struct fields only).
+    Weak(String),
+}
+
+/// How a struct is copied: the fields Ferreal carries, and those it leaves out (at their C++
+/// defaults when Rust passes the struct to C++).
+#[derive(Clone, Debug)]
+struct StructPlan {
+    meta: StructMeta,
+    fields: Vec<FieldPlan>,
+    left_out: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug)]
+struct FieldPlan {
+    rust: String,
+    cpp: String,
+    ty: PTy,
+    doc: Option<String>,
+}
+
+/// The reflection data the bindings are resolved against, and the structs planned so far.
+struct Types<'m> {
+    classes: &'m HashMap<&'m str, &'m ClassMeta>,
+    enums: &'m HashMap<&'m str, &'m EnumMeta>,
+    structs: HashMap<&'m str, &'m StructMeta>,
+    plans: BTreeMap<String, Result<StructPlan, String>>,
+    /// The structs looked at, which the lock file keeps.
+    consulted: BTreeSet<String>,
+}
+
+impl Types<'_> {
+    fn param_type(&mut self, t: &TypeMeta) -> Result<PTy, String> {
+        Ok(match t.kind.as_str() {
+            "bool" => PTy::Bool,
+            "int32" => PTy::I32,
+            "int64" => PTy::I64,
+            "uint8" => PTy::U8,
+            "uint32" => PTy::U32,
+            "float" => PTy::F32,
+            "double" => PTy::F64,
+            "string" => PTy::Str,
+            "name" => PTy::Name,
+            "enum" => {
+                let name = t.enumeration.clone().unwrap_or_default();
+                let Some(e) = self.enums.get(name.as_str()) else {
+                    return Err(format!("enum {name}, which was not exported"));
+                };
+                let value = enum_value_type(e);
+                // A TEnumAsByte (a ByteProperty) is a byte whatever the enum's type; an
+                // EnumProperty holds the enum's own type, which an old namespaced enum leaves
+                // to the compiler.
+                let member = if t.property == "ByteProperty" {
+                    Int::U8
+                } else {
+                    Int::of_enum(&e.underlying)
+                        .ok_or_else(|| format!("enum {name}, of {} values", e.underlying))?
+                };
+                PTy::Enum {
+                    name,
+                    value,
+                    member,
+                }
+            }
+            "struct" => self.struct_type(t.strukt.as_deref().unwrap_or("?"))?,
+            "object" => {
+                let c = t.class.clone().unwrap_or_else(|| "UObject".into());
+                if !self.classes.contains_key(c.as_str()) {
+                    return Err(format!("an object of {c}, which was not exported"));
+                }
+                PTy::Obj(c)
+            }
+            k => return Err(format!("a {k} ({})", t.property)),
+        })
+    }
+
+    /// A struct's type: Ferreal's own for the math types it maps, else a copy of its fields.
+    fn struct_type(&mut self, cpp: &str) -> Result<PTy, String> {
+        match cpp {
+            "FVector" => return Ok(PTy::Vector),
+            "FVector2D" => return Ok(PTy::Vector2D),
+            "FLinearColor" => return Ok(PTy::LinearColor),
+            "FRotator" => return Ok(PTy::Rotator),
+            "FQuat" => return Ok(PTy::Quat),
+            "FTransform" => return Ok(PTy::Transform),
+            _ => {}
+        }
+        let Some(meta) = self.structs.get(cpp).copied() else {
+            return Err(format!("struct {cpp}, which was not exported"));
+        };
+        self.consulted.insert(cpp.to_string());
+        // A struct adding no field to a mapped one (`FVector_NetQuantize`) is that one.
+        if meta.fields.is_empty()
+            && let Some(parent) = &meta.parent
+            && let Ok(t) = self.struct_type(parent)
+            && t.is_math()
+        {
+            return Ok(t);
+        }
+        if meta.noexport {
+            return Err(format!(
+                "struct {cpp}, a core type declared to Unreal Header Tool apart from its C++"
+            ));
+        }
+        self.plan(cpp)?;
+        Ok(PTy::Struct(cpp.to_string()))
+    }
+
+    fn plan(&mut self, cpp: &str) -> Result<(), String> {
+        if let Some(p) = self.plans.get(cpp) {
+            return p.as_ref().map(|_| ()).map_err(Clone::clone);
+        }
+        self.plans
+            .insert(cpp.into(), Err(format!("struct {cpp}, which holds itself")));
+        let meta = self.structs[cpp];
+        // Its ancestors' fields first.
+        let mut chain = vec![meta];
+        let mut at = meta.parent.clone();
+        while let Some(p) = at {
+            match self.structs.get(p.as_str()).copied() {
+                Some(m) if !m.noexport && chain.len() < 16 => {
+                    self.consulted.insert(p.clone());
+                    chain.push(m);
+                    at = m.parent.clone();
+                }
+                _ => break,
+            }
+        }
+        chain.reverse();
+        let mut fields = Vec::new();
+        let mut left_out = Vec::new();
+        let mut names = BTreeSet::new();
+        for m in chain {
+            for f in &m.fields {
+                let why = if !f.is_public {
+                    Some("not public")
+                } else if f.editor_only {
+                    Some("editor only")
+                } else if f.deprecated {
+                    Some("deprecated")
+                } else if f.fixed_array {
+                    Some("an array of a fixed size")
+                } else {
+                    None
+                };
+                let ty = match why {
+                    Some(w) => Err(w.to_string()),
+                    None if f.ty.kind == "weak" => {
+                        let c = f.ty.class.clone().unwrap_or_else(|| "UObject".into());
+                        if self.classes.contains_key(c.as_str()) {
+                            Ok(PTy::Weak(c))
+                        } else {
+                            Err(format!("a weak pointer to {c}, which was not exported"))
+                        }
+                    }
+                    None => self.param_type(&f.ty),
+                };
+                match ty {
+                    Ok(ty) => {
+                        let mut rust = param_name(&f.name, ty == PTy::Bool);
+                        while !names.insert(rust.clone()) {
+                            rust.push('_');
+                        }
+                        fields.push(FieldPlan {
+                            rust,
+                            cpp: f.name.clone(),
+                            ty,
+                            doc: f.doc.clone(),
+                        });
+                    }
+                    Err(why) => left_out.push((f.name.clone(), why)),
+                }
+            }
+        }
+        let plan = if fields.is_empty() {
+            Err(format!("struct {cpp}, none of whose fields Ferreal copies"))
+        } else {
+            Ok(StructPlan {
+                meta: meta.clone(),
+                fields,
+                left_out,
+            })
+        };
+        let r = plan.as_ref().map(|_| ()).map_err(Clone::clone);
+        self.plans.insert(cpp.into(), plan);
+        r
+    }
 }
 
 /// An enum's integer type.
@@ -344,15 +578,102 @@ pub struct Bindings {
     bound_classes: BTreeSet<String>,
     functions: Vec<Bound>,
     enums: Vec<EnumMeta>,
+    /// The structs passed, those their fields hold first.
+    structs: Vec<StructPlan>,
+    /// Their Rust names, by C++ name.
+    struct_names: BTreeMap<String, String>,
     /// Functions left out, with why (shown in the generated file).
     skipped: Vec<(String, String)>,
     /// What the lock file keeps.
     pub lock: Metadata,
 }
 
+/// `Rotator`, `Quat`, `Transform`: math types `cpp!` passes by name, Ferreal's own.
+fn is_math(name: &str) -> bool {
+    matches!(name, "Rotator" | "Quat" | "Transform")
+}
+
+/// A type a `cpp!` block passes by name, as its C++ sees it.
+pub struct Named(PTy);
+
+impl Named {
+    /// Its C++ value (an engine enum as its integer).
+    pub fn cpp_value(&self) -> String {
+        match &self.0 {
+            PTy::Enum { value, .. } => value.cpp().into(),
+            t => t.cpp_member(),
+        }
+    }
+
+    /// Its carrier from Rust (`inbound` false) or to Rust; `scope` qualifies the generated
+    /// structs' carriers and conversions (`Ferreal::<Module>::Detail::`).
+    pub fn cpp_carrier(&self, inbound: bool, scope: &str) -> String {
+        match &self.0 {
+            PTy::Struct(_) => format!("{scope}{}", self.0.cpp_carrier(inbound)),
+            t => t.cpp_carrier(inbound),
+        }
+    }
+
+    pub fn from_carrier(&self, e: &str, scope: &str) -> String {
+        match &self.0 {
+            PTy::Struct(s) => format!("{scope}FromRust_{s}({e})"),
+            PTy::Enum { .. } => e.into(),
+            t => t.cpp_from_carrier(e),
+        }
+    }
+
+    pub fn to_carrier(&self, e: &str, scope: &str) -> String {
+        match &self.0 {
+            PTy::Struct(s) => format!("{scope}ToRust_{s}({e})"),
+            PTy::Enum { .. } => e.into(),
+            t => t.cpp_to_carrier(e),
+        }
+    }
+}
+
 impl Bindings {
     pub fn is_empty(&self) -> bool {
         self.functions.is_empty()
+    }
+
+    /// A type `cpp!` passes by its Rust name: a math type, a generated struct or enum.
+    pub fn named(&self, name: &str) -> Option<Named> {
+        match name {
+            "Rotator" => return Some(Named(PTy::Rotator)),
+            "Quat" => return Some(Named(PTy::Quat)),
+            "Transform" => return Some(Named(PTy::Transform)),
+            _ => {}
+        }
+        if let Some((cpp, _)) = self.struct_names.iter().find(|(_, n)| *n == name) {
+            return Some(Named(PTy::Struct(cpp.clone())));
+        }
+        self.enums
+            .iter()
+            .find(|e| enum_rust_name(self, &e.cpp) == name)
+            .map(|e| {
+                let value = enum_value_type(e);
+                Named(PTy::Enum {
+                    name: e.cpp.clone(),
+                    value,
+                    member: value,
+                })
+            })
+    }
+
+    /// The C++ of the structs copied: their carriers and conversions (in
+    /// `Ferreal::<M>::Detail`).
+    pub fn cpp_structs(&self) -> String {
+        let mut o = String::new();
+        if self.structs.is_empty() {
+            return o;
+        }
+        // Fields C++ deprecates without telling reflection are copied too.
+        o.push_str("\nPRAGMA_DISABLE_DEPRECATION_WARNINGS\n");
+        for p in &self.structs {
+            self.cpp_struct(&mut o, p);
+        }
+        o.push_str("PRAGMA_ENABLE_DEPRECATION_WARNINGS\n");
+        o
     }
 
     /// The marker of a C++ class (`AActor` → `Actor`), if the bindings have one.
@@ -386,27 +707,39 @@ pub enum Source {
 ///
 /// Errors carry [`NEEDS_METADATA`] when a later build can fix them (Unreal has not exported
 /// the data yet, or the lock file lacks a class newly named).
+///
+/// `named` are the types `cpp!` blocks pass by name (`HitResult`): engine structs (`F...`) and
+/// enums (`E...`), generated whether or not a bound function passes them.
 pub fn resolve(
     source: &Source,
     requests: &[Request],
     handles: &[Handle],
+    named: &[Request],
 ) -> Result<Bindings, Vec<String>> {
+    let named: Vec<&Request> = named.iter().filter(|n| !is_math(&n.cpp)).collect();
     let (meta, exported) = match source {
         Source::Exported(m) => (m, true),
         Source::Lock(m) => (m, false),
         Source::None => {
-            if requests.is_empty() {
+            let Some(first) = requests.first().or(named.first().copied()) else {
                 return Ok(Bindings::default());
-            }
+            };
             return Err(vec![format!(
-                "{}: ferreal::engine! names engine classes, but there is no reflection data yet. Enable the Ferreal plugin and build the Unreal project: Unreal Header Tool exports the data during that build, and the next build generates the bindings ({NEEDS_METADATA}). Outside Unreal builds, commit the {} that build writes, or set {METADATA_ENV} to the exporter's FerrealEngine.json.",
-                requests[0].at, LOCK_FILE
+                "{}: the crate uses engine classes or types, but there is no reflection data yet. Enable the Ferreal plugin and build the Unreal project: Unreal Header Tool exports the data during that build, and the next build generates the bindings ({NEEDS_METADATA}). Outside Unreal builds, commit the {} that build writes, or set {METADATA_ENV} to the exporter's FerrealEngine.json.",
+                first.at, LOCK_FILE
             )]);
         }
     };
     let classes: HashMap<&str, &ClassMeta> =
         meta.classes.iter().map(|c| (c.cpp.as_str(), c)).collect();
     let enums: HashMap<&str, &EnumMeta> = meta.enums.iter().map(|e| (e.cpp.as_str(), e)).collect();
+    let mut types = Types {
+        classes: &classes,
+        enums: &enums,
+        structs: meta.structs.iter().map(|s| (s.cpp.as_str(), s)).collect(),
+        plans: BTreeMap::new(),
+        consulted: BTreeSet::new(),
+    };
     let ancestors = |cpp: &str| -> Vec<String> {
         let mut out = Vec::new();
         let mut at = Some(cpp.to_string());
@@ -478,7 +811,7 @@ pub fn resolve(
             if f.internal {
                 continue;
             }
-            match bind(class, f, &classes, &enums) {
+            match bind(class, f, &mut types) {
                 Ok(b) => {
                     for p in b.params.iter().chain(&b.ret) {
                         match &p.ty {
@@ -510,6 +843,61 @@ pub fn resolve(
         }
     }
 
+    // The types `cpp!` blocks pass by name.
+    let mut named_structs = Vec::new();
+    for n in &named {
+        let (strukt, enumeration) = (format!("F{}", n.cpp), format!("E{}", n.cpp));
+        if types.structs.contains_key(strukt.as_str()) {
+            match types.struct_type(&strukt) {
+                Ok(PTy::Struct(s)) => named_structs.push(s),
+                Ok(_) => {}
+                Err(why) => errors.push(format!("{}: {}: Ferreal cannot copy {why}", n.at, n.cpp)),
+            }
+        } else if enums.contains_key(enumeration.as_str()) {
+            used_enums.insert(enumeration);
+        } else if exported {
+            errors.push(format!(
+                "{}: {} is not a #[uenum], an engine struct ({strukt}) or an engine enum ({enumeration})",
+                n.at, n.cpp
+            ));
+        } else {
+            errors.push(format!(
+                "{}: {} is not in {LOCK_FILE} yet: build the Unreal project with the Ferreal plugin enabled to export it ({NEEDS_METADATA})",
+                n.at, n.cpp
+            ));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+
+    // The structs the functions pass, those their fields hold first; the classes and enums
+    // their fields name.
+    let mut structs = Vec::new();
+    let mut seen = BTreeSet::new();
+    for p in functions
+        .iter()
+        .flat_map(|b: &Bound| b.params.iter().chain(&b.ret))
+    {
+        if let PTy::Struct(s) = &p.ty {
+            order_structs(&types.plans, s, &mut seen, &mut structs);
+        }
+    }
+    for s in &named_structs {
+        order_structs(&types.plans, s, &mut seen, &mut structs);
+    }
+    for p in &structs {
+        for f in &p.fields {
+            match &f.ty {
+                PTy::Obj(c) | PTy::Weak(c) => needed.extend(ancestors(c)),
+                PTy::Enum { name, .. } => {
+                    used_enums.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
     // Markers: the crate's own types where it has them, else generated, named by the C++
     // name without its prefix (unless two classes would share it).
     let mut markers = BTreeMap::new();
@@ -535,6 +923,23 @@ pub fn resolve(
         };
         markers.insert(cpp.clone(), marker);
     }
+    // Structs by their C++ name without the `F`, unless a class marker has that name.
+    let struct_names: BTreeMap<String, String> = structs
+        .iter()
+        .map(|p| {
+            let cpp = &p.meta.cpp;
+            let bare = cpp
+                .strip_prefix('F')
+                .filter(|r| r.starts_with(|c: char| c.is_uppercase()))
+                .unwrap_or(cpp);
+            let name = if markers.values().any(|m: &Marker| m.name == bare) {
+                format!("{bare}Struct")
+            } else {
+                bare.to_string()
+            };
+            (cpp.clone(), name)
+        })
+        .collect();
     let mut enum_list: Vec<EnumMeta> = used_enums
         .iter()
         .filter_map(|e| enums.get(e.as_str()).map(|m| (*m).clone()))
@@ -561,6 +966,11 @@ pub fn resolve(
                 c
             })
             .collect(),
+        structs: types
+            .consulted
+            .iter()
+            .filter_map(|s| types.structs.get(s.as_str()).map(|m| (*m).clone()))
+            .collect(),
         enums: enum_list.clone(),
     };
     for c in &mut ordered {
@@ -573,6 +983,8 @@ pub fn resolve(
         classes: ordered,
         functions,
         enums: enum_list,
+        structs,
+        struct_names,
         bound_classes: bound
             .into_iter()
             .filter(|c| !own.contains(c.as_str()))
@@ -582,13 +994,29 @@ pub fn resolve(
     })
 }
 
+/// Adds struct `s` (a planned one) to `out`, after the structs its fields hold.
+fn order_structs(
+    plans: &BTreeMap<String, Result<StructPlan, String>>,
+    s: &str,
+    seen: &mut BTreeSet<String>,
+    out: &mut Vec<StructPlan>,
+) {
+    if !seen.insert(s.to_string()) {
+        return;
+    }
+    let Some(Ok(p)) = plans.get(s) else {
+        return;
+    };
+    for f in &p.fields {
+        if let PTy::Struct(n) = &f.ty {
+            order_structs(plans, n, seen, out);
+        }
+    }
+    out.push(p.clone());
+}
+
 /// How a function binds, or why it does not.
-fn bind(
-    class: &ClassMeta,
-    f: &FunctionMeta,
-    classes: &HashMap<&str, &ClassMeta>,
-    enums: &HashMap<&str, &EnumMeta>,
-) -> Result<Bound, String> {
+fn bind(class: &ClassMeta, f: &FunctionMeta, types: &mut Types<'_>) -> Result<Bound, String> {
     let mut params = Vec::new();
     let mut ret = None;
     let mut used = BTreeSet::new();
@@ -596,7 +1024,9 @@ fn bind(
         if p.out && !p.is_const {
             return Err(format!("its output parameter {}", p.name));
         }
-        let ty = param_type(&p.ty, classes, enums).map_err(|t| format!("{} is {t}", p.name))?;
+        let ty = types
+            .param_type(&p.ty)
+            .map_err(|t| format!("{} is {t}", p.name))?;
         let mut rust = param_name(&p.name, ty == PTy::Bool);
         while !used.insert(rust.clone()) {
             rust.push('_');
@@ -637,60 +1067,6 @@ fn property_classes(t: &TypeMeta) -> String {
         }
         p => p.into(),
     }
-}
-
-fn param_type(
-    t: &TypeMeta,
-    classes: &HashMap<&str, &ClassMeta>,
-    enums: &HashMap<&str, &EnumMeta>,
-) -> Result<PTy, String> {
-    Ok(match t.kind.as_str() {
-        "bool" => PTy::Bool,
-        "int32" => PTy::I32,
-        "int64" => PTy::I64,
-        "uint8" => PTy::U8,
-        "uint32" => PTy::U32,
-        "float" => PTy::F32,
-        "double" => PTy::F64,
-        "string" => PTy::Str,
-        "name" => PTy::Name,
-        "enum" => {
-            let name = t.enumeration.clone().unwrap_or_default();
-            let Some(e) = enums.get(name.as_str()) else {
-                return Err(format!("enum {name}, which was not exported"));
-            };
-            let value = enum_value_type(e);
-            // A TEnumAsByte (a ByteProperty) is a byte whatever the enum's type; an
-            // EnumProperty holds the enum's own type, which an old namespaced enum leaves to
-            // the compiler.
-            let member = if t.property == "ByteProperty" {
-                Int::U8
-            } else {
-                Int::of_enum(&e.underlying)
-                    .ok_or_else(|| format!("enum {name}, of {} values", e.underlying))?
-            };
-            PTy::Enum {
-                name,
-                value,
-                member,
-            }
-        }
-        "struct" => match t.strukt.as_deref() {
-            Some("FVector") => PTy::Vector,
-            Some("FVector2D") => PTy::Vector2D,
-            Some("FLinearColor") => PTy::LinearColor,
-            Some("FRotator") => PTy::Rotator,
-            s => return Err(format!("struct {}", s.unwrap_or("?"))),
-        },
-        "object" => {
-            let c = t.class.clone().unwrap_or_else(|| "UObject".into());
-            if !classes.contains_key(c.as_str()) {
-                return Err(format!("an object of {c}, which was not exported"));
-            }
-            PTy::Obj(c)
-        }
-        k => return Err(format!("a {k} ({})", t.property)),
-    })
 }
 
 /// `K2_SetActorLocation` → `k2_set_actor_location`, `GetHUD` → `get_hud`.
@@ -765,11 +1141,25 @@ fn doc(out: &mut String, indent: &str, text: &str) {
 }
 
 impl PTy {
+    /// One of the math types Ferreal maps to its own (`FVector` → `Vector3`).
+    fn is_math(&self) -> bool {
+        matches!(
+            self,
+            PTy::Vector
+                | PTy::Vector2D
+                | PTy::LinearColor
+                | PTy::Rotator
+                | PTy::Quat
+                | PTy::Transform
+        )
+    }
+
     /// The Rust type of a parameter (`generic`: the type parameter of an object's class).
     fn rust_param(&self, b: &Bindings, generic: &str) -> String {
         match self {
             PTy::Str | PTy::Name => "&str".into(),
             PTy::Obj(_) => format!("::core::option::Option<::ferreal::Obj<{generic}>>"),
+            PTy::Struct(s) => format!("&{}", b.struct_names[s]),
             _ => self.rust_value(b),
         }
     }
@@ -790,7 +1180,12 @@ impl PTy {
             PTy::Vector2D => "::ferreal::Vector2".into(),
             PTy::LinearColor => "::ferreal::LinearColor".into(),
             PTy::Rotator => "::ferreal::Rotator".into(),
-            PTy::Obj(c) => format!("::core::option::Option<::ferreal::Obj<{}>>", b.path(c)),
+            PTy::Quat => "::ferreal::Quat".into(),
+            PTy::Transform => "::ferreal::Transform".into(),
+            PTy::Obj(c) | PTy::Weak(c) => {
+                format!("::core::option::Option<::ferreal::Obj<{}>>", b.path(c))
+            }
+            PTy::Struct(s) => b.struct_names[s].clone(),
         }
     }
 
@@ -799,7 +1194,8 @@ impl PTy {
         match self {
             PTy::Str | PTy::Name => "::ferreal::ffi::Str8".into(),
             PTy::Enum { value, .. } => value.rust().into(),
-            PTy::Obj(_) => "::ferreal::ffi::RawObj".into(),
+            PTy::Obj(_) | PTy::Weak(_) => "::ferreal::ffi::RawObj".into(),
+            PTy::Struct(s) => format!("{s}Out"),
             _ => self.rust_value_plain(),
         }
     }
@@ -809,7 +1205,8 @@ impl PTy {
         match self {
             PTy::Str | PTy::Name => "::ferreal::ffi::Str16".into(),
             PTy::Enum { value, .. } => value.rust().into(),
-            PTy::Obj(_) => "::ferreal::ffi::RawObj".into(),
+            PTy::Obj(_) | PTy::Weak(_) => "::ferreal::ffi::RawObj".into(),
+            PTy::Struct(s) => format!("{s}In"),
             _ => self.rust_value_plain(),
         }
     }
@@ -827,17 +1224,22 @@ impl PTy {
             PTy::Vector2D => "::ferreal::Vector2",
             PTy::LinearColor => "::ferreal::LinearColor",
             PTy::Rotator => "::ferreal::Rotator",
+            PTy::Quat => "::ferreal::Quat",
+            PTy::Transform => "::ferreal::Transform",
             _ => unreachable!("not a plain carrier"),
         }
         .into()
     }
 
-    /// Rust argument `v` as its carrier.
+    /// Rust argument `v` as its carrier (`v` a reference for strings and structs).
     fn rust_to_carrier(&self, v: &str) -> String {
         match self {
             PTy::Str | PTy::Name => format!("::ferreal::ffi::Str8::new({v})"),
             PTy::Enum { .. } => format!("{v}.0"),
-            PTy::Obj(_) => format!("{v}.map_or(::ferreal::ffi::RawObj::NULL, |o| o.raw())"),
+            PTy::Obj(_) | PTy::Weak(_) => {
+                format!("{v}.map_or(::ferreal::ffi::RawObj::NULL, |o| o.raw())")
+            }
+            PTy::Struct(_) => format!("::ferreal::Carry::to_out({v})"),
             _ => v.into(),
         }
     }
@@ -847,13 +1249,14 @@ impl PTy {
         match self {
             PTy::Str | PTy::Name => format!("{v}.to_string_lossy()"),
             PTy::Enum { name, .. } => format!("{}({v})", enum_rust_name(b, name)),
-            PTy::Obj(_) => format!("::ferreal::Obj::from_raw({v})"),
+            PTy::Obj(_) | PTy::Weak(_) => format!("::ferreal::Obj::from_raw({v})"),
+            PTy::Struct(s) => format!("<{} as ::ferreal::Carry>::from_in({v})", b.struct_names[s]),
             _ => v.into(),
         }
     }
 
     /// The type of the parameter's member in the C++ struct of parameters.
-    fn cpp_member(&self) -> &'static str {
+    fn cpp_member(&self) -> String {
         match self {
             PTy::Bool => "bool",
             PTy::I32 => "int32",
@@ -869,21 +1272,29 @@ impl PTy {
             PTy::Vector2D => "FVector2D",
             PTy::LinearColor => "FLinearColor",
             PTy::Rotator => "FRotator",
+            PTy::Quat => "FQuat",
+            PTy::Transform => "FTransform",
             PTy::Obj(_) => "UObject*",
+            PTy::Struct(s) => s,
+            PTy::Weak(c) => return format!("TWeakObjectPtr<{c}>"),
         }
+        .into()
     }
 
     /// The C++ carrier from Rust (`inbound` false) or to Rust (`inbound` true).
-    fn cpp_carrier(&self, inbound: bool) -> &'static str {
+    fn cpp_carrier(&self, inbound: bool) -> String {
         match self {
-            PTy::Str | PTy::Name if inbound => "Ferreal::FStr16",
-            PTy::Str | PTy::Name => "Ferreal::FStr8",
-            PTy::Vector => "Ferreal::FVec3",
-            PTy::Vector2D => "Ferreal::FVec2",
-            PTy::LinearColor => "Ferreal::FColor4",
-            PTy::Rotator => "Ferreal::FRot",
-            PTy::Obj(_) => "void*",
-            PTy::Enum { value, .. } => value.cpp(),
+            PTy::Str | PTy::Name if inbound => "Ferreal::FStr16".into(),
+            PTy::Str | PTy::Name => "Ferreal::FStr8".into(),
+            PTy::Vector => "Ferreal::FVec3".into(),
+            PTy::Vector2D => "Ferreal::FVec2".into(),
+            PTy::LinearColor => "Ferreal::FColor4".into(),
+            PTy::Rotator => "Ferreal::FRot".into(),
+            PTy::Quat => "Ferreal::FQuat4".into(),
+            PTy::Transform => "Ferreal::FXform".into(),
+            PTy::Obj(_) | PTy::Weak(_) => "void*".into(),
+            PTy::Enum { value, .. } => value.cpp().into(),
+            PTy::Struct(s) => format!("FStruct_{s}_{}", if inbound { "In" } else { "Out" }),
             t => t.cpp_member(),
         }
     }
@@ -897,8 +1308,12 @@ impl PTy {
             PTy::Vector2D => format!("Ferreal::FromVec2({e})"),
             PTy::LinearColor => format!("Ferreal::FromColor4({e})"),
             PTy::Rotator => format!("Ferreal::FromRot({e})"),
+            PTy::Quat => format!("Ferreal::FromQuat({e})"),
+            PTy::Transform => format!("Ferreal::FromXform({e})"),
             PTy::Obj(_) => format!("static_cast<UObject*>({e})"),
+            PTy::Weak(c) => format!("Ferreal::FromObj<{c}>({e})"),
             PTy::Enum { member, .. } => format!("static_cast<{}>({e})", member.cpp()),
+            PTy::Struct(s) => format!("FromRust_{s}({e})"),
             _ => e.into(),
         }
     }
@@ -912,8 +1327,12 @@ impl PTy {
             PTy::Vector2D => format!("Ferreal::ToVec2({e})"),
             PTy::LinearColor => format!("Ferreal::ToColor4({e})"),
             PTy::Rotator => format!("Ferreal::ToRot({e})"),
+            PTy::Quat => format!("Ferreal::ToQuat({e})"),
+            PTy::Transform => format!("Ferreal::ToXform({e})"),
             PTy::Obj(_) => format!("Ferreal::ToObj({e})"),
+            PTy::Weak(_) => format!("Ferreal::ToObj({e}.Get())"),
             PTy::Enum { value, .. } => format!("static_cast<{}>({e})", value.cpp()),
+            PTy::Struct(s) => format!("ToRust_{s}({e})"),
             _ => e.into(),
         }
     }
@@ -938,7 +1357,7 @@ impl Bindings {
         let mut o = String::from(
             "// Generated by ferreal-build from Unreal's reflection data (ferreal::engine!): do not edit.\n",
         );
-        if self.classes.is_empty() {
+        if self.classes.is_empty() && self.structs.is_empty() && self.enums.is_empty() {
             return o;
         }
         if !self.functions.is_empty() {
@@ -993,7 +1412,16 @@ impl Bindings {
                     let _ = writeln!(o, "    pub const {c}: {name} = {name}({});", v.value);
                 }
             }
-            o.push_str("}\n");
+            let t = value_type.rust();
+            let _ = writeln!(
+                o,
+                "}}\n\nimpl ::ferreal::Carry for {name} {{\n    type In = {t};\n    type Out = {t};\n\n    fn from_in(c: {t}) -> Self {{\n        {name}(c)\n    }}\n\n    fn to_out(&self) -> {t} {{\n        self.0\n    }}\n}}"
+            );
+        }
+
+        // Structs.
+        for p in &self.structs {
+            self.rust_struct(&mut o, p);
         }
 
         // Classes.
@@ -1078,6 +1506,149 @@ impl Bindings {
             }
         }
         o
+    }
+
+    /// A struct's copy, its carriers, and its `Carry` between them.
+    fn rust_struct(&self, o: &mut String, p: &StructPlan) {
+        let cpp = &p.meta.cpp;
+        let name = &self.struct_names[cpp];
+        o.push('\n');
+        let _ = writeln!(o, "/// `{cpp}` (`{}`): a copy of its fields.", p.meta.path);
+        if let Some(d) = &p.meta.doc {
+            o.push_str("///\n");
+            doc(o, "", d);
+        }
+        if !p.left_out.is_empty() {
+            o.push_str("///\n/// Not copied (passed to C++, they keep their defaults):\n");
+            for (f, why) in &p.left_out {
+                let _ = writeln!(o, "/// - `{f}`: {why}");
+            }
+        }
+        let _ = writeln!(
+            o,
+            "#[doc(alias = {cpp:?})]\n#[derive(Clone, Debug, Default, PartialEq)]\npub struct {name} {{"
+        );
+        for f in &p.fields {
+            let _ = writeln!(o, "    /// `{}`", f.cpp);
+            if let Some(d) = &f.doc {
+                o.push_str("    ///\n");
+                doc(o, "    ", d);
+            }
+            let _ = writeln!(o, "    pub {}: {},", f.rust, f.ty.rust_value(self));
+        }
+        o.push_str("}\n");
+        for (suffix, inbound) in [("In", true), ("Out", false)] {
+            let _ = writeln!(
+                o,
+                "\n#[doc(hidden)]\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct {cpp}{suffix} {{"
+            );
+            for f in &p.fields {
+                let t = if inbound {
+                    f.ty.rust_carrier_in()
+                } else {
+                    f.ty.rust_carrier_out()
+                };
+                let _ = writeln!(o, "    pub {}: {t},", f.rust);
+            }
+            o.push_str("}\n");
+        }
+        let from: Vec<String> = p
+            .fields
+            .iter()
+            .map(|f| {
+                let v = f.ty.rust_from_carrier(self, &format!("c.{}", f.rust));
+                format!("            {}: {v},", f.rust)
+            })
+            .collect();
+        let to: Vec<String> = p
+            .fields
+            .iter()
+            .map(|f| {
+                let v = match f.ty {
+                    PTy::Str | PTy::Name | PTy::Struct(_) => format!("&self.{}", f.rust),
+                    _ => format!("self.{}", f.rust),
+                };
+                format!("            {}: {},", f.rust, f.ty.rust_to_carrier(&v))
+            })
+            .collect();
+        let _ = writeln!(
+            o,
+            "\nimpl ::ferreal::Carry for {name} {{\n    type In = {cpp}In;\n    type Out = {cpp}Out;\n\n    fn from_in(c: {cpp}In) -> Self {{\n        {name} {{\n{}\n        }}\n    }}\n\n    fn to_out(&self) -> {cpp}Out {{\n        {cpp}Out {{\n{}\n        }}\n    }}\n}}",
+            from.join("\n"),
+            to.join("\n")
+        );
+    }
+
+    /// A struct's carriers in C++, and its conversions to and from them.
+    fn cpp_struct(&self, o: &mut String, p: &StructPlan) {
+        let cpp = &p.meta.cpp;
+        let _ = writeln!(o, "\n\t// {cpp}: the fields Rust copies.");
+        for (suffix, inbound) in [("In", true), ("Out", false)] {
+            let _ = writeln!(o, "\tstruct FStruct_{cpp}_{suffix}\n\t{{");
+            for f in &p.fields {
+                let _ = writeln!(o, "\t\t{} {};", f.ty.cpp_carrier(inbound), f.cpp);
+            }
+            o.push_str("\t};\n");
+        }
+        let _ = writeln!(
+            o,
+            "\n\tinline FStruct_{cpp}_In ToRust_{cpp}(const {cpp}& V)\n\t{{\n\t\tFStruct_{cpp}_In C;"
+        );
+        for f in &p.fields {
+            let _ = writeln!(
+                o,
+                "\t\tC.{} = {};",
+                f.cpp,
+                f.ty.cpp_to_carrier(&format!("V.{}", f.cpp))
+            );
+        }
+        o.push_str("\t\treturn C;\n\t}\n");
+        let _ = writeln!(
+            o,
+            "\n\tinline {cpp} FromRust_{cpp}(const FStruct_{cpp}_Out& C)\n\t{{\n\t\t{cpp} V;"
+        );
+        for f in &p.fields {
+            let e = format!("C.{}", f.cpp);
+            // Fields are of their own types: an object's class, an enum, a struct deriving
+            // from a math type (`FVector_NetQuantize`).
+            let value = match &f.ty {
+                PTy::Obj(c) | PTy::Weak(c) => {
+                    let path = self
+                        .classes
+                        .iter()
+                        .find(|m| &m.cpp == c)
+                        .map_or("", |m| m.path.as_str());
+                    format!("Ferreal::FromObjOf<{c}>({e}, TEXT(\"{path}\"))")
+                }
+                t if matches!(t, PTy::Enum { .. }) || t.is_math() => format!(
+                    "static_cast<decltype(V.{})>({})",
+                    f.cpp,
+                    f.ty.cpp_from_carrier(&e)
+                ),
+                t => t.cpp_from_carrier(&e),
+            };
+            let _ = writeln!(o, "\t\tV.{} = {value};", f.cpp);
+        }
+        o.push_str("\t\treturn V;\n\t}\n");
+    }
+
+    /// The headers of the structs the bindings pass, and of the classes their fields point
+    /// to (converting a field casts to its class, which a struct's header may only declare).
+    pub fn struct_headers(&self) -> impl Iterator<Item = &str> {
+        let classes = self.structs.iter().flat_map(|p| {
+            p.fields.iter().filter_map(|f| match &f.ty {
+                PTy::Obj(c) | PTy::Weak(c) => self
+                    .classes
+                    .iter()
+                    .find(|m| &m.cpp == c)
+                    .and_then(|m| m.header.as_deref()),
+                _ => None,
+            })
+        });
+        self.structs
+            .iter()
+            .filter_map(|p| p.meta.header.as_deref())
+            .chain(classes)
     }
 
     fn has_instance_functions(&self, cpp: &str) -> bool {
@@ -1180,7 +1751,10 @@ impl Bindings {
                     .iter()
                     .map(|p| format!("{} In{}", p.ty.cpp_carrier(false), p.cpp)),
             );
-            let ret = f.ret.as_ref().map_or("void", |r| r.ty.cpp_carrier(true));
+            let ret = f
+                .ret
+                .as_ref()
+                .map_or_else(|| "void".to_string(), |r| r.ty.cpp_carrier(true));
             let _ = writeln!(o, "\t\t{ret} (*F{i})({});", args.join(", "));
         }
         o.push_str("\t};\n");
@@ -1212,7 +1786,10 @@ impl Bindings {
                     .iter()
                     .map(|p| format!("{} In{}", p.ty.cpp_carrier(false), p.cpp)),
             );
-            let ret = f.ret.as_ref().map_or("void", |r| r.ty.cpp_carrier(true));
+            let ret = f
+                .ret
+                .as_ref()
+                .map_or_else(|| "void".to_string(), |r| r.ty.cpp_carrier(true));
             let layout: Vec<String> = f
                 .params
                 .iter()
@@ -1371,6 +1948,7 @@ mod tests {
             format: FORMAT.into(),
             version: FORMAT_VERSION,
             classes: vec![object, actor, spinner],
+            structs: vec![],
             enums: vec![],
         }
     }
@@ -1386,7 +1964,7 @@ mod tests {
             cpp: "ASpinner".into(),
             own: true,
         }];
-        let b = resolve(&Source::Exported(sample()), &req, &handles).unwrap();
+        let b = resolve(&Source::Exported(sample()), &req, &handles, &[]).unwrap();
         assert_eq!(b.marker("AActor"), Some("Actor"));
         assert_eq!(b.functions.len(), 2);
         assert_eq!(b.skipped.len(), 1);
@@ -1408,17 +1986,99 @@ mod tests {
     }
 
     #[test]
+    fn copies_structs() {
+        let mut m = sample();
+        let field = |name: &str, t: TypeMeta| FieldMeta {
+            name: name.into(),
+            ty: t,
+            is_public: true,
+            ..FieldMeta::default()
+        };
+        let mut location = ty("struct", "StructProperty");
+        location.strukt = Some("FVector_NetQuantize".into());
+        let mut component = ty("weak", "WeakObjectProperty");
+        component.class = Some("AActor".into());
+        let mut private = field("FaceIndex", ty("int32", "IntProperty"));
+        private.is_public = false;
+        m.structs = vec![
+            StructMeta {
+                cpp: "FVector".into(),
+                noexport: true,
+                ..StructMeta::default()
+            },
+            StructMeta {
+                cpp: "FVector_NetQuantize".into(),
+                parent: Some("FVector".into()),
+                ..StructMeta::default()
+            },
+            StructMeta {
+                cpp: "FHitResult".into(),
+                path: "/Script/Engine.HitResult".into(),
+                header: Some("Engine/HitResult.h".into()),
+                fields: vec![
+                    field("bBlockingHit", ty("bool", "BoolProperty")),
+                    field("Location", location),
+                    field("Actor", component),
+                    field("BoneName", ty("name", "NameProperty")),
+                    private,
+                ],
+                ..StructMeta::default()
+            },
+        ];
+        let mut hit = ty("struct", "StructProperty");
+        hit.strukt = Some("FHitResult".into());
+        let mut ret = param("ReturnValue", hit.clone());
+        ret.ret = true;
+        m.classes[1].functions.push(FunctionMeta {
+            cpp: "LastHit".into(),
+            name: "LastHit".into(),
+            params: vec![param("Previous", hit), ret],
+            ..FunctionMeta::default()
+        });
+        let req = [Request {
+            cpp: "AActor".into(),
+            at: "src/lib.rs:3".into(),
+        }];
+        let b = resolve(&Source::Exported(m), &req, &[], &[]).unwrap();
+        let rust = b.rust("ferreal_Hello_engine_register");
+        assert!(rust.contains("pub struct HitResult {"), "{rust}");
+        assert!(rust.contains("pub blocking_hit: bool,"));
+        assert!(rust.contains("pub location: ::ferreal::Vector3,"));
+        assert!(rust.contains("pub actor: ::core::option::Option<::ferreal::Obj<Actor>>,"));
+        assert!(rust.contains("/// - `FaceIndex`: not public"));
+        assert!(rust.contains("fn last_hit(&self, previous: &HitResult) -> HitResult"));
+        let cpp = b.cpp_structs() + &b.cpp_table_type() + &b.cpp_thunks();
+        assert!(
+            cpp.contains("C.Actor = Ferreal::ToObj(V.Actor.Get());"),
+            "{cpp}"
+        );
+        assert!(cpp.contains(
+            "V.Location = static_cast<decltype(V.Location)>(Ferreal::FromVec3(C.Location));"
+        ));
+        assert!(cpp.contains("C.BoneName = Ferreal::KeepString(V.BoneName.ToString());"));
+        assert!(cpp.contains("Parms.Previous = FromRust_FHitResult(InPrevious);"));
+        assert!(cpp.contains("return ToRust_FHitResult(Parms.ReturnValue);"));
+        assert_eq!(
+            b.struct_headers().collect::<Vec<_>>(),
+            ["Engine/HitResult.h"]
+        );
+        // The lock keeps what resolving needed.
+        let lock = b.lock_json();
+        assert!(lock.contains("\"FVector_NetQuantize\"") && lock.contains("\"FHitResult\""));
+    }
+
+    #[test]
     fn errors() {
         let req = [Request {
             cpp: "AActr".into(),
             at: "src/lib.rs:3".into(),
         }];
-        let e = resolve(&Source::Exported(sample()), &req, &[]).unwrap_err();
+        let e = resolve(&Source::Exported(sample()), &req, &[], &[]).unwrap_err();
         assert!(e[0].contains("AActr is not a reflected class"));
-        let e = resolve(&Source::None, &req, &[]).unwrap_err();
+        let e = resolve(&Source::None, &req, &[], &[]).unwrap_err();
         assert!(e[0].contains(NEEDS_METADATA));
-        let e = resolve(&Source::Lock(sample()), &req, &[]).unwrap_err();
+        let e = resolve(&Source::Lock(sample()), &req, &[], &[]).unwrap_err();
         assert!(e[0].contains(NEEDS_METADATA));
-        assert!(resolve(&Source::None, &[], &[]).unwrap().is_empty());
+        assert!(resolve(&Source::None, &[], &[], &[]).unwrap().is_empty());
     }
 }

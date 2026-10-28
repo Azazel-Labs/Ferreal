@@ -164,9 +164,11 @@ fn label(actor: Obj<engine::Actor>, times: i32) -> String {
 }
 ```
 
-The captures are Rust variables with their types, as Ferreal passes them (see Types); in the
-C++ they are variables of the same names holding the C++ values (`AActor* actor`,
-`int32 times`, an `FString` for a string). The block is the body of a C++ function that
+The captures are Rust variables with their types, as Ferreal passes them (see Types), or of
+the engine's structs and enums (`engine::HitResult`), `Rotator`, `Quat` and `Transform`; in
+the C++ they are variables of the same names holding the C++ values (`AActor* actor`,
+`int32 times`, an `FString` for a string, an `FHitResult`, an engine enum as its integer).
+Structs and enums are borrowed, not moved, as a closure would. The block is the body of a C++ function that
 returns the C++ value of the `-> Type` (nothing without one). `ferreal-build` copies each
 block, comments and all, into the module's `.cpp` as a function of its own, with the headers
 of the classes it captures (`ferreal::cpp_include!("Header.h");` adds others), and Rust calls
@@ -175,9 +177,9 @@ that function, whose comment gives the block's place in the Rust.
 
 The C++ goes in braces when it is also valid Rust tokens, which almost all C++ is; in a string
 otherwise (`cpp!([n: i32] -> i32 r#"return n * 1'000;"#)`, for digit separators or
-multi-character literals). Blocks are found in the crate's sources by `ferreal-build`, so a
-`cpp!` cannot sit inside another macro's arguments (`println!(..., cpp!(...))`): bind its
-value first. The C++ runs only in the Unreal module (and the mock test), never in a cargo
+multi-character literals). Blocks are found in the crate's sources by `ferreal-build`,
+anywhere (inside other macros' arguments too), except in `macro_rules!` definitions that
+substitute `$` variables into them. The C++ runs only in the Unreal module (and the mock test), never in a cargo
 build, and C++ is not checked like Rust: a captured object is `nullptr` if it is not of the
 class (`Cast`), and what the C++ does with it is up to the C++.
 
@@ -238,10 +240,23 @@ exporter's output: `"rust-analyzer.cargo.extraEnv": { "FERREAL_ENGINE_METADATA":
 The generated C++ sits in the module's `Source`, so the IDE project Unreal generates indexes
 it too.
 
-Parameters: the types above, `FName` (as `&str`/`String`), `FRotator` (`Rotator`) and enums
-(as `TEnumAsByte` or as themselves). Functions with output parameters (non-const references), arrays, other structs,
-`FText`, class references, soft and weak references, delegates or interfaces are left out
-for now; the generated file lists them with why.
+Parameters: the types above, `FName` (as `&str`/`String`), `FRotator`, `FQuat` and
+`FTransform` (`Rotator`, `Quat`, `Transform`), enums (as `TEnumAsByte` or as themselves), and
+structs. Functions with output parameters (non-const references), arrays, `FText`, class
+references, soft references, delegates or interfaces are left out for now; the generated
+file lists them with why.
+
+**Structs.** A struct a bound function passes (`FHitResult`) becomes a Rust struct in the
+`engine` module (`engine::HitResult`) holding a copy of its reflected fields: numbers,
+strings and names, enums, objects and weak pointers (`Option<Obj<C>>`), the math types, and
+structs of the same kind. The copy is made at the boundary, field by field, by generated C++
+(`FHitResult` → Rust when returned, Rust → a default `FHitResult` with the fields set when
+passed), so no Rust ever points into C++ memory or depends on a struct's layout. A
+`const FTransform&` the engine returns is copied the same way, while it is valid. Fields that
+are not public, editor-only, deprecated or fixed-size arrays are left out (their struct's
+documentation lists them; passed to C++, they keep their defaults), as are core types whose
+C++ differs from what Unreal Header Tool is told (NoExport), except the math types Ferreal
+maps itself.
 
 ## Setting up a module
 

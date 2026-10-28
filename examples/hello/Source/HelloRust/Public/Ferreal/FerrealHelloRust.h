@@ -29,4 +29,10 @@ namespace Ferreal::HelloRust
 	 * engine bindings cannot reach (they call reflected functions only).
 	 */
 	HELLORUST_API FString Label(AActor* InActor, int32 InTimes);
+
+	/**
+	 * `Ferreal::HelloRust::Hit(...)` from C++: engine structs, copied to Rust: an `FHitResult`
+	 * the engine makes, and the actor's `FTransform` (a `const FTransform&` in C++).
+	 */
+	HELLORUST_API FString Hit(AActor* InActor, UPrimitiveComponent* InComponent);
 }

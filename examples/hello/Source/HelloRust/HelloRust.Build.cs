@@ -80,6 +80,7 @@ public class HelloRust : ModuleRules
 			bool bNeedsMetadata = RunCargo(CrateDir, string.Format(
 				"build --manifest-path \"{0}\" --lib --profile {1} --target {2} --target-dir \"{3}\"",
 				Path.Combine(CrateDir, "Cargo.toml"), Profile, Triple, TargetDir), Metadata);
+			ForgetGenerated();
 			if (bNeedsMetadata)
 			{
 				// The first build with new engine classes: this build exports their reflection
@@ -104,6 +105,26 @@ public class HelloRust : ModuleRules
 		foreach (string Source in Directory.EnumerateFiles(Path.Combine(CrateDir, "src"), "*.rs", SearchOption.AllDirectories))
 		{
 			ExternalDependencies.Add(Source);
+		}
+	}
+
+	/// <summary>
+	/// Makes Unreal Build Tool read the generated C++ (Public/Ferreal, Private/Ferreal) again:
+	/// cargo writes it while this file runs, after the tool may have cached what it found there
+	/// (and would then compile the old files, or miss new ones).
+	/// </summary>
+	private void ForgetGenerated()
+	{
+		foreach (string Dir in new string[] { Path.Combine(ModuleDirectory, "Public", "Ferreal"), Path.Combine(ModuleDirectory, "Private", "Ferreal") })
+		{
+			UnrealBuildBase.DirectoryItem.ResetCachedInfo(Dir);
+			if (Directory.Exists(Dir))
+			{
+				foreach (string File in Directory.EnumerateFiles(Dir))
+				{
+					UnrealBuildBase.FileItem.ResetCachedInfo(File);
+				}
+			}
 		}
 	}
 

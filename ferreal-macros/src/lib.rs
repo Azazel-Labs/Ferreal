@@ -403,6 +403,17 @@ fn uenum_inner(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
             }
         }
 
+        impl ::ferreal::Carry for #ident {
+            type In = u8;
+            type Out = u8;
+            fn from_in(c: u8) -> Self {
+                <#ident as ::ferreal::UEnum>::from_u8(c)
+            }
+            fn to_out(&self) -> u8 {
+                *self as u8
+            }
+        }
+
         impl ::ferreal::UEnum for #ident {
             fn to_u8(self) -> u8 {
                 self as u8
@@ -655,6 +666,14 @@ fn cpp_inner(item: Tokens) -> syn::Result<Tokens> {
         let name = format_ident!("{}", c.param.name.trim_start_matches("r#"));
         let local = format_ident!("ferreal_{}", c.param.name.trim_start_matches("r#"));
         let rust_ty = &c.rust_ty;
+        // Named types (`#[uenum]`s, engine structs and enums, `Rotator`...) are borrowed, as
+        // a closure would, and cross through their `Carry`.
+        if let ferreal_model::Ty::Enum(_) = &c.param.ty {
+            bind.push(quote!(let #local: &#rust_ty = &#name;));
+            carriers.push(quote!(<#rust_ty as ::ferreal::Carry>::Out));
+            args.push(quote!(::ferreal::Carry::to_out(#local)));
+            continue;
+        }
         // Borrowed captures (`&str`, `&[T]`) take whatever derefs to them.
         bind.push(if matches!(rust_ty, syn::Type::Reference(_)) {
             quote!(let #local: #rust_ty = &*#name;)
@@ -666,8 +685,13 @@ fn cpp_inner(item: Tokens) -> syn::Result<Tokens> {
         keep.push(k);
         args.push(a);
     }
-    let ret = ffi_type(&block.ret, true);
-    let read = value_in(&block.ret, &quote!(r), "cpp!");
+    let (ret, read) = match (&block.ret, &block.ret_rust_ty) {
+        (ferreal_model::Ty::Enum(_), Some(t)) => (
+            quote!(<#t as ::ferreal::Carry>::In),
+            quote!(<#t as ::ferreal::Carry>::from_in(r)),
+        ),
+        (t, _) => (ffi_type(t, true), value_in(t, &quote!(r), "cpp!")),
+    };
     Ok(quote! {
         {
             #(#bind)*

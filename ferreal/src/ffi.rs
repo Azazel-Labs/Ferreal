@@ -252,7 +252,7 @@ impl CppBlocks {
         match entries.binary_search_by_key(&key, |e| e.key) {
             Ok(i) => entries[i].function,
             Err(_) => panic!(
-                "ferreal: the cpp! block at {at} has no C++ function: ferreal-build finds cpp! blocks in the crate's sources, not inside other macros' arguments (or the module's C++ is out of date)"
+                "ferreal: the cpp! block at {at} has no C++ function: the module's C++ is out of date (build the Unreal module again), or the block comes from a macro_rules! expansion with `$` substitutions, which ferreal-build cannot see"
             ),
         }
     }

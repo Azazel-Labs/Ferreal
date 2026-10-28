@@ -53,11 +53,11 @@ pub use ferreal_macros::{
     cpp, cpp_base, cpp_include, engine, engine_class, export, module, uclass, uclass_impl, uenum,
 };
 pub use obj::{AsObject, Class, Derives, IsA, Obj, obj_from_ffi, objs_from_ffi};
-pub use types::{LinearColor, Rotator, UEnum, Vector2, Vector3};
+pub use types::{Carry, LinearColor, Quat, Rotator, Transform, UEnum, Vector2, Vector3};
 
 pub mod prelude {
     pub use crate::{
-        AsObject, IsA, LinearColor, Obj, Rotator, UEnum, Vector2, Vector3, cpp, cpp_base, engine,
-        engine_class, export, uclass, uclass_impl, uenum,
+        AsObject, IsA, LinearColor, Obj, Quat, Rotator, Transform, UEnum, Vector2, Vector3, cpp,
+        cpp_base, engine, engine_class, export, uclass, uclass_impl, uenum,
     };
 }

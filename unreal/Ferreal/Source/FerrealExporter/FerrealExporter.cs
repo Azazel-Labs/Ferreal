@@ -1,11 +1,11 @@
-// Ferreal's exporter for Unreal Header Tool: writes the reflection data of every class and enum
-// UHT parsed (the engine's, the project's, its plugins') into one JSON file, which
+// Ferreal's exporter for Unreal Header Tool: writes the reflection data of every class, struct
+// and enum UHT parsed (the engine's, the project's, its plugins') into one JSON file, which
 // ferreal-build reads to generate typed Rust bindings of the engine classes a crate names.
 //
 // It writes what calling a function through reflection needs, and nothing about memory
 // layout: the classes with their path and parent, their reflected functions with flags and
 // parameters (each parameter's kind, the engine property class that will hold it, its
-// flags), and the enums with their values. ferreal-build lays out each call's parameters as a
+// flags), the structs with their reflected fields, and the enums with their values. ferreal-build lays out each call's parameters as a
 // C++ struct, and the generated code checks that struct against the engine's own reflection
 // when it first calls the function.
 //
@@ -48,6 +48,7 @@ public static class FerrealExporter
 			json.WriteNumber("version", FormatVersion);
 
 			var enums = new List<(UhtEnum Enum, string Module)>();
+			var structs = new List<(UhtScriptStruct Struct, string Module, UhtHeaderFile Header)>();
 			json.WriteStartArray("classes");
 			foreach (UhtModule module in factory.Session.Modules)
 			{
@@ -63,9 +64,19 @@ public static class FerrealExporter
 							case UhtEnum e:
 								enums.Add((e, module.ShortName));
 								break;
+							case UhtScriptStruct s:
+								structs.Add((s, module.ShortName, header));
+								break;
 						}
 					}
 				}
+			}
+			json.WriteEndArray();
+
+			json.WriteStartArray("structs");
+			foreach ((UhtScriptStruct s, string module, UhtHeaderFile header) in structs)
+			{
+				WriteStruct(json, s, module, header);
 			}
 			json.WriteEndArray();
 
@@ -89,11 +100,7 @@ public static class FerrealExporter
 		json.WriteString("cpp", c.SourceName);
 		json.WriteString("path", $"/Script/{module}.{c.EngineName}");
 		json.WriteString("module", module);
-		string include = header.IncludeFilePath ?? header.ModuleRelativeFilePath;
-		if (!string.IsNullOrEmpty(include))
-		{
-			json.WriteString("header", include);
-		}
+		WriteHeader(json, header);
 		if (c.SuperClass != null)
 		{
 			json.WriteString("super", c.SuperClass.SourceName);
@@ -109,6 +116,53 @@ public static class FerrealExporter
 			{
 				WriteFunction(json, f);
 			}
+		}
+		json.WriteEndArray();
+		json.WriteEndObject();
+	}
+
+	private static void WriteHeader(Utf8JsonWriter json, UhtHeaderFile header)
+	{
+		string include = header.IncludeFilePath ?? header.ModuleRelativeFilePath;
+		if (!string.IsNullOrEmpty(include))
+		{
+			json.WriteString("header", include);
+		}
+	}
+
+	/// <summary>
+	/// A struct and its reflected fields. ferreal-build copies the fields Rust can carry; it
+	/// needs to know which C++ can reach (public, not editor-only, not deprecated, not arrays
+	/// of a fixed size), and which structs are declared to UHT apart from their real C++
+	/// (NoExport: the core math types).
+	/// </summary>
+	private static void WriteStruct(Utf8JsonWriter json, UhtScriptStruct s, string module, UhtHeaderFile header)
+	{
+		json.WriteStartObject();
+		json.WriteString("cpp", s.SourceName);
+		json.WriteString("path", $"/Script/{module}.{s.EngineName}");
+		json.WriteString("module", module);
+		WriteHeader(json, header);
+		if (s.SuperScriptStruct != null)
+		{
+			json.WriteString("super", s.SuperScriptStruct.SourceName);
+		}
+		json.WriteBoolean("noexport", s.ScriptStructFlags.HasAnyFlags(EStructFlags.NoExport));
+		WriteDoc(json, s);
+		json.WriteStartArray("fields");
+		foreach (UhtProperty p in s.Properties)
+		{
+			EPropertyFlags flags = p.PropertyFlags;
+			json.WriteStartObject();
+			json.WriteString("name", p.SourceName);
+			json.WritePropertyName("type");
+			WriteType(json, p);
+			json.WriteBoolean("public", flags.HasAnyFlags(EPropertyFlags.NativeAccessSpecifierPublic));
+			json.WriteBoolean("editor_only", flags.HasAnyFlags(EPropertyFlags.EditorOnly));
+			json.WriteBoolean("deprecated", flags.HasAnyFlags(EPropertyFlags.Deprecated));
+			json.WriteBoolean("fixed_array", p.ArrayDimensions != null);
+			WriteDoc(json, p);
+			json.WriteEndObject();
 		}
 		json.WriteEndArray();
 		json.WriteEndObject();
@@ -263,8 +317,9 @@ public static class FerrealExporter
 			case UhtSoftObjectProperty:
 				Kind(json, "other", "SoftObjectProperty");
 				break;
-			case UhtWeakObjectPtrProperty:
-				Kind(json, "other", "WeakObjectProperty");
+			case UhtWeakObjectPtrProperty w:
+				Kind(json, "weak", "WeakObjectProperty");
+				json.WriteString("class", w.Class.SourceName);
 				break;
 			case UhtLazyObjectPtrProperty:
 				Kind(json, "other", "LazyObjectProperty");

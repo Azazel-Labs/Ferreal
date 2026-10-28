@@ -25,6 +25,8 @@ using ANSICHAR = char;
 using TCHAR = char16_t;
 
 #define TEXT(x) u##x
+#define PRAGMA_DISABLE_DEPRECATION_WARNINGS
+#define PRAGMA_ENABLE_DEPRECATION_WARNINGS
 #define UCLASS(...)
 #define UENUM(...)
 #define UPROPERTY(...)
@@ -237,6 +239,28 @@ struct FRotator
 	double Pitch = 0, Yaw = 0, Roll = 0;
 };
 
+struct FQuat
+{
+	FQuat() = default;
+	FQuat(double InX, double InY, double InZ, double InW) : X(InX), Y(InY), Z(InZ), W(InW) {}
+	double X = 0, Y = 0, Z = 0, W = 1;
+};
+
+/** As the engine's: its members are not public. */
+struct FTransform
+{
+	FTransform() = default;
+	FTransform(const FQuat& InRotation, const FVector& InTranslation, const FVector& InScale)
+		: Rotation(InRotation), Translation(InTranslation), Scale3D(InScale) {}
+	FQuat GetRotation() const { return Rotation; }
+	FVector GetTranslation() const { return Translation; }
+	FVector GetScale3D() const { return Scale3D; }
+protected:
+	FQuat Rotation;
+	FVector Translation;
+	FVector Scale3D{1, 1, 1};
+};
+
 /** What UE_LOG printed (the last line, and all of them), for the tests. */
 inline FString GFerrealMockLastLog;
 inline std::vector<std::string> GFerrealMockLogs;
@@ -436,3 +460,15 @@ private:
 
 template <typename T>
 T* Cast(UObject* O) { return dynamic_cast<T*>(O); }
+
+/** A weak pointer, without the weakness: what the glue reads and writes. */
+template <typename T>
+class TWeakObjectPtr
+{
+public:
+	TWeakObjectPtr() = default;
+	TWeakObjectPtr(T* O) : Ptr(O) {}
+	T* Get() const { return Ptr; }
+private:
+	T* Ptr = nullptr;
+};

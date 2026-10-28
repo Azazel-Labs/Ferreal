@@ -60,6 +60,7 @@ public static class Fixture
 	}
 
 	private const EFunctionFlags Callable = EFunctionFlags.BlueprintCallable;
+	private const EPropertyFlags Public = EPropertyFlags.NativeAccessSpecifierPublic;
 
 	public static int Main(string[] args)
 	{
@@ -94,6 +95,8 @@ public static class Fixture
 			Function("SetOwner", Callable, null, Object("NewOwner", actor)),
 			Function("ActorHasTag", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Const, Ret<UhtBoolProperty>(), Prop<UhtNameProperty>("Tag")),
 			Function("GetGameTimeSinceCreation", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Const, Ret<UhtFloatProperty>()),
+			// `const FTransform& GetTransform() const` in C++: reflection returns a copy.
+			Function("GetTransform", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Const, Struct("ReturnValue", "FTransform")),
 		]);
 
 		UhtClass component = Class("UActorComponent", obj, Function("Activate", Callable, null, Prop<UhtBoolProperty>("bReset")));
@@ -117,6 +120,52 @@ public static class Fixture
 		UhtClass system = Class("UKismetSystemLibrary", library,
 			Function("GetDisplayName", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(), named));
 
+		// Structs: FVector is a core type, declared to UHT apart from its C++ (NoExport); its
+		// network form adds no field; FHitResult's fields are of every kind Ferreal copies, and
+		// of kinds it leaves out (private, editor-only, fixed arrays).
+		var vector = new UhtScriptStruct { SourceName = "FVector", EngineName = "Vector", ScriptStructFlags = EStructFlags.NoExport };
+		// FTransform's members are not public in C++, whatever UHT is told: Ferreal maps it.
+		var quat = new UhtScriptStruct { SourceName = "FQuat", EngineName = "Quat", ScriptStructFlags = EStructFlags.NoExport };
+		var transform = new UhtScriptStruct { SourceName = "FTransform", EngineName = "Transform", ScriptStructFlags = EStructFlags.NoExport };
+		transform.Children.AddRange([Struct("Rotation", "FQuat", Public), Struct("Translation", "FVector", Public), Struct("Scale3D", "FVector", Public)]);
+		// A struct with nothing Rust can copy: left out of FHitResult.
+		var handle = new UhtScriptStruct { SourceName = "FActorInstanceHandle", EngineName = "ActorInstanceHandle" };
+		var referenceObject = Prop<UhtWeakObjectPtrProperty>("ReferenceObject", EPropertyFlags.NativeAccessSpecifierPrivate);
+		referenceObject.Class = obj;
+		handle.Children.Add(referenceObject);
+		UhtStructProperty hitObjectHandle = Struct("HitObjectHandle", "FActorInstanceHandle", Public);
+		hitObjectHandle.ScriptStruct = handle;
+		var netQuantize = new UhtScriptStruct { SourceName = "FVector_NetQuantize", EngineName = "Vector_NetQuantize", SuperScriptStruct = vector };
+		var hit = new UhtScriptStruct { SourceName = "FHitResult", EngineName = "HitResult" };
+		hit.MetaData["ToolTip"] = "Structure containing information about one hit of a trace, such as point of impact and surface normal at that point.";
+		UhtStructProperty location = Struct("Location", "FVector_NetQuantize", Public);
+		location.ScriptStruct = netQuantize;
+		var hitComponent = Prop<UhtWeakObjectPtrProperty>("Component", Public);
+		hitComponent.Class = primitive;
+		var fixedArray = Prop<UhtIntProperty>("Fixed", Public);
+		fixedArray.ArrayDimensions = "2";
+		hit.Children.AddRange([
+			Prop<UhtBoolProperty>("bBlockingHit", Public),
+			Prop<UhtFloatProperty>("Time", Public),
+			location,
+			hitComponent,
+			Prop<UhtNameProperty>("BoneName", Public),
+			Prop<UhtIntProperty>("FaceIndex", EPropertyFlags.NativeAccessSpecifierPrivate),
+			Prop<UhtFloatProperty>("EditorOnlyTime", Public | EPropertyFlags.EditorOnly),
+			fixedArray,
+			hitObjectHandle,
+		]);
+		UhtClass physicalMaterial = Class("UPhysicalMaterial", obj);
+		// As the engine declares it.
+		UhtClass statics = Class("UGameplayStatics", library,
+			Function("MakeHitResult", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Struct("ReturnValue", "FHitResult"),
+				Prop<UhtBoolProperty>("bBlockingHit"), Prop<UhtBoolProperty>("bInitialOverlap"), Prop<UhtFloatProperty>("Time"), Prop<UhtFloatProperty>("Distance"),
+				Struct("Location", "FVector"), Struct("ImpactPoint", "FVector"), Struct("Normal", "FVector"), Struct("ImpactNormal", "FVector"),
+				Object("PhysMat", physicalMaterial), Object("HitActor", actor), Object("HitComponent", primitive),
+				Prop<UhtNameProperty>("HitBoneName"), Prop<UhtNameProperty>("BoneName"),
+				Prop<UhtIntProperty>("HitItem"), Prop<UhtIntProperty>("ElementIndex"), Prop<UhtIntProperty>("FaceIndex"),
+				Struct("TraceStart", "FVector"), Struct("TraceEnd", "FVector")));
+
 		// A class of the project (Rust's own: not bound).
 		UhtClass greeter = Class("UGreeter", obj, Function("Greet", Callable, Ret<UhtStrProperty>(), Prop<UhtStrProperty>("Punctuation")));
 
@@ -127,7 +176,7 @@ public static class Fixture
 			return h;
 		}
 		var session = new UhtSession();
-		session.Modules.Add(new UhtModule { ShortName = "CoreUObject", Headers = [Header("UObject/Object.h", obj)] });
+		session.Modules.Add(new UhtModule { ShortName = "CoreUObject", Headers = [Header("UObject/Object.h", obj), Header("UObject/NoExportTypes.h", vector, quat, transform)] });
 		session.Modules.Add(new UhtModule
 		{
 			ShortName = "Engine",
@@ -141,6 +190,11 @@ public static class Fixture
 				Header("Kismet/BlueprintFunctionLibrary.h", library),
 				Header("Kismet/KismetStringLibrary.h", strings),
 				Header("Kismet/KismetSystemLibrary.h", system),
+				Header("Engine/NetSerialization.h", netQuantize),
+				Header("Engine/ActorInstanceHandle.h", handle),
+				Header("Engine/HitResult.h", hit),
+				Header("PhysicalMaterials/PhysicalMaterial.h", physicalMaterial),
+				Header("Kismet/GameplayStatics.h", statics),
 			],
 		});
 		session.Modules.Add(new UhtModule { ShortName = "HelloRust", Headers = [Header("Ferreal/Greeter.h", greeter)] });

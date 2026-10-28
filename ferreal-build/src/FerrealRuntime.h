@@ -65,6 +65,18 @@ namespace Ferreal
 		double Pitch, Yaw, Roll;
 	};
 
+	struct FQuat4
+	{
+		double X, Y, Z, W;
+	};
+
+	struct FXform
+	{
+		FQuat4 Rotation;
+		FVec3 Translation;
+		FVec3 Scale;
+	};
+
 	inline FStr16 ToStr16(const FString& S)
 	{
 		return FStr16{reinterpret_cast<const uint16*>(*S), static_cast<size_t>(S.Len())};
@@ -81,12 +93,18 @@ namespace Ferreal
 		return Out;
 	}
 
-	/** Keeps a string returned to Rust until the next one this thread returns. */
+	/**
+	 * Keeps a string returned to Rust, which copies it at once: in a ring of slots, so the
+	 * strings of a struct returned whole are all alive when Rust reads them.
+	 */
 	inline FStr16 KeepString(FString S)
 	{
-		static thread_local FString Kept;
-		Kept = MoveTemp(S);
-		return ToStr16(Kept);
+		static thread_local FString Kept[256];
+		static thread_local int32 Next = 0;
+		FString& Slot = Kept[Next];
+		Next = (Next + 1) % 256;
+		Slot = MoveTemp(S);
+		return ToStr16(Slot);
 	}
 
 	inline FColor4 ToColor4(const FLinearColor& C) { return FColor4{C.R, C.G, C.B, C.A}; }
@@ -97,6 +115,16 @@ namespace Ferreal
 	inline FVector FromVec3(FVec3 V) { return FVector(V.X, V.Y, V.Z); }
 	inline FRot ToRot(const FRotator& R) { return FRot{R.Pitch, R.Yaw, R.Roll}; }
 	inline FRotator FromRot(FRot R) { return FRotator(R.Pitch, R.Yaw, R.Roll); }
+	inline FQuat4 ToQuat(const FQuat& Q) { return FQuat4{Q.X, Q.Y, Q.Z, Q.W}; }
+	inline FQuat FromQuat(FQuat4 Q) { return FQuat(Q.X, Q.Y, Q.Z, Q.W); }
+	inline FXform ToXform(const FTransform& T)
+	{
+		return FXform{ToQuat(T.GetRotation()), ToVec3(T.GetTranslation()), ToVec3(T.GetScale3D())};
+	}
+	inline FTransform FromXform(const FXform& X)
+	{
+		return FTransform(FromQuat(X.Rotation), FromVec3(X.Translation), FromVec3(X.Scale));
+	}
 
 	inline void* ToObj(const UObject* P) { return const_cast<UObject*>(P); }
 
@@ -110,6 +138,27 @@ namespace Ferreal
 	T* FromObj(void* P)
 	{
 		return Cast<T>(static_cast<UObject*>(P));
+	}
+
+	/**
+	 * An object Rust passed, as a T if it is one, checked against the class found by its path:
+	 * a struct's fields may be of classes from modules this one does not link, whose
+	 * StaticClass (which Cast needs) it cannot call.
+	 */
+	template <typename T>
+	T* FromObjOf(void* P, const TCHAR* ClassPath)
+	{
+		UObject* O = static_cast<UObject*>(P);
+		if (O == nullptr)
+		{
+			return nullptr;
+		}
+		static UClass* Class = nullptr;
+		if (Class == nullptr)
+		{
+			Class = FindObject<UClass>(nullptr, ClassPath);
+		}
+		return Class != nullptr && O->IsA(Class) ? static_cast<T*>(O) : nullptr;
 	}
 
 	/** An object array passed to Rust: alive until the end of the full expression (the call). */

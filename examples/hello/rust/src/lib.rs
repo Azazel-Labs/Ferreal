@@ -13,7 +13,8 @@ ferreal::engine!(
     AActor,
     UPrimitiveComponent,
     UKismetStringLibrary,
-    UKismetSystemLibrary
+    UKismetSystemLibrary,
+    UGameplayStatics
 );
 
 engine_class!(pub Texture = "UTexture2D" in "Engine/Texture2D.h");
@@ -221,12 +222,72 @@ pub fn poke(actor: Obj<engine::Actor>, component: Obj<engine::PrimitiveComponent
 /// engine bindings cannot reach (they call reflected functions only).
 #[export]
 pub fn label(actor: Obj<engine::Actor>, times: i32) -> String {
-    // A plain C++ method of AActor, not a UFUNCTION.
-    let name = cpp!([actor: Obj<engine::Actor>] -> String {
-        return actor->GetActorNameOrLabel();
-    });
+    // A plain C++ method of AActor, not a UFUNCTION (in another macro's arguments, too).
+    let name = format!(
+        "{} x",
+        cpp!([actor: Obj<engine::Actor>] -> String {
+            return actor->GetActorNameOrLabel();
+        })
+    );
     let most = cpp!([times: i32] -> i32 { return FMath::Max(times, 2); });
     cpp!([name: &str, most: i32] -> String {
-        return FString::Printf(TEXT("%s x%d"), *name, most);
+        return FString::Printf(TEXT("%s%d"), *name, most);
     })
+}
+
+/// `Ferreal::HelloRust::Hit(...)` from C++: engine structs, copied to Rust: an `FHitResult`
+/// the engine makes, and the actor's `FTransform` (a `const FTransform&` in C++).
+#[export]
+pub fn hit(actor: Obj<engine::Actor>, component: Obj<engine::PrimitiveComponent>) -> String {
+    use engine::{ActorApi, GameplayStatics, PhysicalMaterial};
+
+    let at = Vector3::new(1.0, 2.0, 3.0);
+    let zero = Vector3::ZERO;
+    let hit = GameplayStatics::make_hit_result(
+        true,
+        false,
+        0.5,
+        10.0,
+        at,
+        at,
+        zero,
+        zero,
+        None::<Obj<PhysicalMaterial>>,
+        Some(actor),
+        Some(component),
+        "",
+        "Spine",
+        0,
+        0,
+        0,
+        zero,
+        at,
+    );
+    let transform = actor.get_transform();
+    // The same types through C++ written inline, both ways.
+    let later = cpp!([hit: engine::HitResult] -> engine::HitResult {
+        FHitResult Later = hit;
+        Later.Time += 1.0f;
+        return Later;
+    });
+    let moved = cpp!([transform: Transform] -> Transform {
+        const FVector At = transform.GetTranslation();
+        return FTransform(transform.GetRotation(), FVector(At.X, At.Y, At.Z + 10), transform.GetScale3D());
+    });
+    let mode = engine::CollisionEnabled::QUERY_ONLY;
+    let next = cpp!([mode: engine::CollisionEnabled] -> i32 { return mode + 1; });
+    format!(
+        "blocking={} time={} z={} component={} bone={} scale={} turn={} later={} {} moved={} next={}",
+        hit.blocking_hit,
+        hit.time,
+        hit.location.z,
+        hit.component == Some(component),
+        hit.bone_name,
+        transform.scale.x,
+        transform.rotation.z,
+        later.time,
+        later.bone_name,
+        moved.translation.z,
+        next
+    )
 }

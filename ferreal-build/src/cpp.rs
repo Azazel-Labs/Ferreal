@@ -674,6 +674,8 @@ impl<'a> Gen<'a> {
             }
         }
         includes.extend(self.model.cpp_includes.iter().map(|i| i.item.clone()));
+        // The structs the engine bindings copy.
+        includes.extend(self.engine.struct_headers().map(str::to_string));
         for i in &includes {
             let _ = writeln!(o, "#include \"{i}\"");
         }
@@ -728,6 +730,7 @@ impl<'a> Gen<'a> {
             }
             o.push_str("\t};\n");
         }
+        o.push_str(&self.engine.cpp_structs());
         if !self.engine.is_empty() {
             o.push_str(&self.engine.cpp_table_type());
         }
@@ -1002,6 +1005,13 @@ impl<'a> Gen<'a> {
         for b in &self.model.cpp_blocks {
             blocks.entry(b.key).or_insert(b);
         }
+        // Types passed by name that are not the crate's `#[uenum]`s: engine structs and enums,
+        // math types (their conversions are in `Detail`).
+        let scope = format!("Ferreal::{m}::Detail::");
+        let named = |t: &Ty| match t {
+            Ty::Enum(n) if !self.enums.contains_key(n.as_str()) => self.engine.named(n),
+            _ => None,
+        };
         let _ = writeln!(o, "namespace FerrealCpp{m}\n{{");
         for (key, b) in &blocks {
             let name = ferreal_model::cpp::key_name(*key);
@@ -1010,42 +1020,46 @@ impl<'a> Gen<'a> {
                 .captures
                 .iter()
                 .map(|c| {
-                    format!(
-                        "{} FerrealIn_{}",
-                        c.param.ty.cpp_ffi(false),
-                        c.param.cpp_name
-                    )
+                    let carrier = match named(&c.param.ty) {
+                        Some(t) => t.cpp_carrier(false, &scope),
+                        None => c.param.ty.cpp_ffi(false),
+                    };
+                    format!("{carrier} FerrealIn_{}", c.param.cpp_name)
                 })
                 .collect();
+            let ret = named(&block.ret);
             let _ = writeln!(
                 o,
                 "\t// cpp! at {}\n\tstatic {} Cpp_{name}({})\n\t{{",
                 b.location(&self.model.dir),
-                block.ret.cpp_ffi(true),
+                ret.as_ref()
+                    .map_or_else(|| block.ret.cpp_ffi(true), |t| t.cpp_carrier(true, &scope)),
                 params.join(", ")
             );
             for c in &block.captures {
                 let n = &c.param.cpp_name;
-                let _ = writeln!(
-                    o,
-                    "\t\tauto {n} = {};\n\t\t(void){n};",
-                    self.rust_to_cpp(&c.param.ty, &format!("FerrealIn_{n}"), false)
-                );
+                let input = format!("FerrealIn_{n}");
+                let value = match named(&c.param.ty) {
+                    Some(t) => t.from_carrier(&input, &scope),
+                    None => self.rust_to_cpp(&c.param.ty, &input, false),
+                };
+                let _ = writeln!(o, "\t\tauto {n} = {value};\n\t\t(void){n};");
             }
             let _ = writeln!(
                 o,
                 "\t\tauto Body = [&]() -> {}\n\t\t{{{}}};",
-                self.value_type(&block.ret),
+                ret.as_ref()
+                    .map_or_else(|| self.value_type(&block.ret), |t| t.cpp_value()),
                 reindent(&b.text, "\t\t\t", "\t\t")
             );
             if block.ret == Ty::Unit {
                 o.push_str("\t\tBody();\n\t}\n\n");
             } else {
-                let _ = writeln!(
-                    o,
-                    "\t\treturn {};\n\t}}\n",
-                    self.keep_for_rust(&block.ret, "Body()")
-                );
+                let value = match &ret {
+                    Some(t) => t.to_carrier("Body()", &scope),
+                    None => self.keep_for_rust(&block.ret, "Body()"),
+                };
+                let _ = writeln!(o, "\t\treturn {value};\n\t}}\n");
             }
         }
         let entries: Vec<String> = blocks
@@ -1300,6 +1314,12 @@ pub fn check(model: &Collected, engine: &Bindings) -> Vec<String> {
     for b in &model.cpp_blocks {
         let captures = b.block.captures.iter().map(|c| &c.param.ty);
         for t in captures.chain([&b.block.ret]) {
+            // Types by name may be the engine's (resolved with the bindings).
+            if let Ty::Enum(n) = t
+                && engine.named(n).is_some()
+            {
+                continue;
+            }
             check_ty(t, &b.at, &mut errors);
         }
     }

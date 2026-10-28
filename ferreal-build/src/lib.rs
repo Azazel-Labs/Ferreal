@@ -405,8 +405,13 @@ struct CppFinder<'a> {
 }
 
 impl CppFinder<'_> {
-    fn block(&mut self, m: &syn::Macro) -> syn::Result<()> {
-        let block: CppBlock = syn::parse2(m.tokens.clone())?;
+    /// A `cpp!` block: `tokens` are its macro's, `name` the span of its `cpp`.
+    fn block(
+        &mut self,
+        tokens: &proc_macro2::TokenStream,
+        name: proc_macro2::Span,
+    ) -> syn::Result<()> {
+        let block: CppBlock = syn::parse2(tokens.clone())?;
         let text = match &block.body {
             CppBody::Text(s) => s.value(),
             CppBody::Tokens(g) => {
@@ -422,12 +427,11 @@ impl CppFinder<'_> {
                 }
             }
         };
-        let span = m.path.segments.last().expect("a name").ident.span();
         self.out.cpp_blocks.push(CppAt {
-            key: ferreal_model::cpp::key(&m.tokens),
-            at: at(self.file, span),
+            key: ferreal_model::cpp::key(tokens),
+            at: at(self.file, name),
             file: self.file.to_path_buf(),
-            line: span.start().line,
+            line: name.start().line,
             text,
             block,
         });
@@ -457,19 +461,51 @@ impl<'ast> Visit<'ast> for CppFinder<'_> {
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
         let name = m.path.segments.last().map(|s| s.ident.to_string());
         let r = match name.as_deref() {
-            Some("cpp") => self.block(m),
+            Some("cpp") => self.block(
+                &m.tokens,
+                m.path.segments.last().expect("a name").ident.span(),
+            ),
             Some("cpp_include") => syn::parse2::<syn::LitStr>(m.tokens.clone()).map(|s| {
                 self.out.cpp_includes.push(At {
                     item: s.value(),
                     at: at(self.file, s.span()),
                 });
             }),
-            _ => Ok(()),
+            // Other macros' arguments are not parsed: their `cpp!` blocks are found in
+            // their tokens.
+            _ => {
+                self.in_tokens(&m.tokens);
+                Ok(())
+            }
         };
         if let Err(e) = r {
             self.errors.push(located(self.file, &e));
         }
         syn::visit::visit_macro(self, m);
+    }
+}
+
+impl CppFinder<'_> {
+    /// The `cpp!(...)` invocations in `tokens`, at any depth. Those holding `$` (in a
+    /// `macro_rules!` definition) are left out: their expansions differ.
+    fn in_tokens(&mut self, tokens: &proc_macro2::TokenStream) {
+        use proc_macro2::TokenTree;
+        let trees: Vec<TokenTree> = tokens.clone().into_iter().collect();
+        for (i, t) in trees.iter().enumerate() {
+            match (t, trees.get(i + 1), trees.get(i + 2)) {
+                (TokenTree::Ident(id), Some(TokenTree::Punct(bang)), Some(TokenTree::Group(g)))
+                    if id == "cpp" && bang.as_char() == '!' =>
+                {
+                    if !g.stream().to_string().contains('$')
+                        && let Err(e) = self.block(&g.stream(), id.span())
+                    {
+                        self.errors.push(located(self.file, &e));
+                    }
+                }
+                (TokenTree::Group(g), _, _) => self.in_tokens(&g.stream()),
+                _ => {}
+            }
+        }
     }
 }
 
@@ -669,9 +705,27 @@ fn engine_bindings(model: &Collected, lock: &Path) -> Result<engine::Bindings, V
         }
         _ => engine::Source::None,
     };
-    let bindings = engine::resolve(&source, &requests, &handles)?;
+    // The types `cpp!` blocks pass by name that are not the crate's `#[uenum]`s.
+    let own_enums: std::collections::BTreeSet<&str> =
+        model.enums.iter().map(|e| e.item.name.as_str()).collect();
+    let mut named: Vec<engine::Request> = Vec::new();
+    for b in &model.cpp_blocks {
+        let types = b.block.captures.iter().map(|c| &c.param.ty);
+        for t in types.chain([&b.block.ret]) {
+            if let ferreal_model::Ty::Enum(n) = t
+                && !own_enums.contains(n.as_str())
+                && !named.iter().any(|r| &r.cpp == n)
+            {
+                named.push(engine::Request {
+                    cpp: n.clone(),
+                    at: b.at.clone(),
+                });
+            }
+        }
+    }
+    let bindings = engine::resolve(&source, &requests, &handles, &named)?;
     if matches!(source, engine::Source::Exported(_)) {
-        let result = if requests.is_empty() {
+        let result = if requests.is_empty() && named.is_empty() {
             match std::fs::remove_file(lock) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
                 _ => Ok(()),

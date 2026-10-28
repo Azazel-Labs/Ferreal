@@ -88,9 +88,87 @@ impl Rotator {
     }
 }
 
+/// `FQuat`: a rotation as a unit quaternion, doubles.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Quat {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub w: f64,
+}
+
+impl Quat {
+    pub const IDENTITY: Quat = Quat::new(0.0, 0.0, 0.0, 1.0);
+
+    pub const fn new(x: f64, y: f64, z: f64, w: f64) -> Self {
+        Quat { x, y, z, w }
+    }
+}
+
+impl Default for Quat {
+    fn default() -> Self {
+        Quat::IDENTITY
+    }
+}
+
+/// `FTransform`: a rotation, a translation and a scale (copied through its accessors and
+/// constructor: its C++ members are not public).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Transform {
+    pub rotation: Quat,
+    pub translation: Vector3,
+    pub scale: Vector3,
+}
+
+impl Transform {
+    pub const IDENTITY: Transform = Transform {
+        rotation: Quat::IDENTITY,
+        translation: Vector3::ZERO,
+        scale: Vector3::new(1.0, 1.0, 1.0),
+    };
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Transform::IDENTITY
+    }
+}
+
 /// A `#[uenum]`: converted to and from Unreal's `uint8` (the macro implements it).
 pub trait UEnum: Copy + Default {
     fn to_u8(self) -> u8;
     /// The variant with this value, or the default for values the enum doesn't have.
     fn from_u8(v: u8) -> Self;
 }
+
+/// A value that crosses to C++ through `#[repr(C)]` carriers: the engine structs and enums the
+/// bindings generate (`ferreal::engine!`), and `#[uenum]`s. Generated code calls it.
+pub trait Carry: Sized {
+    /// What C++ hands Rust.
+    type In: Copy;
+    /// What Rust hands C++; it may point into `self` (strings), so it is used while `self`
+    /// lives.
+    type Out: Copy;
+    fn from_in(c: Self::In) -> Self;
+    fn to_out(&self) -> Self::Out;
+}
+
+/// The math types are their own carriers (`#[repr(C)]`, laid out as the C++ carriers are).
+macro_rules! carry_self {
+    ($($t:ty),*) => {$(
+        impl Carry for $t {
+            type In = $t;
+            type Out = $t;
+            fn from_in(c: $t) -> Self {
+                c
+            }
+            fn to_out(&self) -> $t {
+                *self
+            }
+        }
+    )*};
+}
+
+carry_self!(LinearColor, Vector2, Vector3, Rotator, Quat, Transform);

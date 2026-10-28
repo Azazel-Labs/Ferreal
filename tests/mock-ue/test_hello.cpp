@@ -3,6 +3,7 @@
 #include "Ferreal/Greeter.h"
 #include "Ferreal/FerrealHelloRust.h"
 #include "Components/PrimitiveComponent.h"
+#include "Engine/HitResult.h"
 #include "Engine/Texture2D.h"
 #include "GameFramework/Actor.h"
 
@@ -68,6 +69,7 @@ struct FMockEngine
 	UScriptStruct Vector{"Vector"};
 	UScriptStruct Rotator{"Rotator"};
 	UScriptStruct HitResult{"HitResult"};
+	UScriptStruct Transform{"Transform"};
 	UClass Object{"Object", nullptr};
 	UClass Actor{"Actor", &Object};
 	UClass ActorComponent{"ActorComponent", &Object};
@@ -78,6 +80,8 @@ struct FMockEngine
 	UObject StringsDefault;
 	UClass System{"KismetSystemLibrary", &Library};
 	UObject SystemDefault;
+	UClass Statics{"GameplayStatics", &Library};
+	UObject StaticsDefault;
 
 	FMockEngine()
 	{
@@ -93,6 +97,9 @@ struct FMockEngine
 		Strings.DefaultObject = &StringsDefault;
 		SystemDefault.MockClass = &System;
 		System.DefaultObject = &SystemDefault;
+		FerrealMockClasses()[u"/Script/Engine.GameplayStatics"] = &Statics;
+		StaticsDefault.MockClass = &Statics;
+		Statics.DefaultObject = &StaticsDefault;
 
 		const int32 Str = sizeof(FString), StrAlign = alignof(FString);
 		const int32 Ptr = sizeof(UObject*);
@@ -127,6 +134,26 @@ struct FMockEngine
 			[](UFunction& F, UObject* Self, uint8* P) { F.Param<FString>(P, 2) = FString(F.Param<FString>(P, 0).Str + F.Param<FString>(P, 1).Str); (void)Self; });
 		AddFunction(Strings, "Conv_IntToString", {Param("InInt", "IntProperty", 4, 4), Return("StrProperty", Str, StrAlign)},
 			[](UFunction& F, UObject*, uint8* P) { F.Param<FString>(P, 1) = FString::Printf(u"%d", F.Param<int32>(P, 0)); });
+		// Structs: returned by value (a copy for `const FTransform&`), copied to Rust field by field.
+		AddFunction(Actor, "GetTransform", {StructParam<FTransform>("ReturnValue", &Transform, true)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<FTransform>(P, 0) = FTransform(FQuat(0, 0, 0.5, 1), State.Location, FVector(2, 2, 2)); });
+		const int32 Name = sizeof(FName), NameAlign = alignof(FName);
+		AddFunction(Statics, "MakeHitResult",
+			{Param("bBlockingHit", "BoolProperty", 1, 1), Param("bInitialOverlap", "BoolProperty", 1, 1), Param("Time", "FloatProperty", 4, 4), Param("Distance", "FloatProperty", 4, 4),
+				StructParam<FVector>("Location", &Vector), StructParam<FVector>("ImpactPoint", &Vector), StructParam<FVector>("Normal", &Vector), StructParam<FVector>("ImpactNormal", &Vector),
+				Param("PhysMat", "ObjectProperty", Ptr, Ptr), Param("HitActor", "ObjectProperty", Ptr, Ptr), Param("HitComponent", "ObjectProperty", Ptr, Ptr),
+				Param("HitBoneName", "NameProperty", Name, NameAlign), Param("BoneName", "NameProperty", Name, NameAlign),
+				Param("HitItem", "IntProperty", 4, 4), Param("ElementIndex", "IntProperty", 4, 4), Param("FaceIndex", "IntProperty", 4, 4),
+				StructParam<FVector>("TraceStart", &Vector), StructParam<FVector>("TraceEnd", &Vector), StructParam<FHitResult>("ReturnValue", &HitResult, true)},
+			[](UFunction& F, UObject*, uint8* P)
+			{
+				FHitResult& Hit = F.Param<FHitResult>(P, 18);
+				Hit.bBlockingHit = F.Param<bool>(P, 0);
+				Hit.Time = F.Param<float>(P, 2);
+				Hit.Location = F.Param<FVector>(P, 4);
+				Hit.Component = Cast<UPrimitiveComponent>(F.Param<UObject*>(P, 10));
+				Hit.BoneName = F.Param<FName>(P, 12);
+			});
 		AddFunction(System, "GetDisplayName", {Param("Object", "ObjectProperty", Ptr, Ptr), Return("StrProperty", Str, StrAlign)},
 			[](UFunction& F, UObject*, uint8* P) { F.Param<FString>(P, 1) = FString(F.Param<UObject*>(P, 0) ? u"Rusty actor" : u"None"); });
 	}
@@ -217,6 +244,8 @@ int main()
 	// C++ written inline in the Rust (cpp!): a plain method, FMath, a string passed both ways.
 	EXPECT(ToUtf8(Ferreal::HelloRust::Label(Actor, 1)) == "Rusty actor x2");
 	EXPECT(ToUtf8(Ferreal::HelloRust::Label(Actor, 5)) == "Rusty actor x5");
+	// Engine structs copied to Rust (FHitResult field by field, FTransform through its accessors).
+	EXPECT(ToUtf8(Ferreal::HelloRust::Hit(Actor, Component)) == "blocking=true time=0.5 z=3 component=true bone=Spine scale=2 turn=0.5 later=1.5 Spine moved=13 next=2");
 	// An object of the wrong class is refused, not called.
 	EXPECT(ToUtf8(Ferreal::HelloRust::Poke(reinterpret_cast<AActor*>(Component), Component)).find("own=false") != std::string::npos
 		|| Logged("which is not a valid Actor"));
