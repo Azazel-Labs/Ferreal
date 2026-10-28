@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["rivet", "rivet-model", "rivet-macros", "rivet-build", "examples/hello/rust"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[workspace.dependencies]
+rivet = { path = "rivet", version = "0.1.0" }
+rivet-model = { path = "rivet-model", version = "0.1.0" }
+rivet-macros = { path = "rivet-macros", version = "0.1.0" }
+rivet-build = { path = "rivet-build", version = "0.1.0" }
+syn = { version = "2", features = ["full", "extra-traits", "visit"] }
+quote = "1"
+proc-macro2 = "1"
+
+# Unreal plugins build their Rust with this profile (the Build.cs template passes it):
+# optimized, with unwinding, so a panic in Rust is caught at the FFI boundary and logged
+# instead of taking the editor down.
+[profile.unreal]
+inherits = "release"
+panic = "unwind"
+debug = "line-tables-only"
+
+[workspace.lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

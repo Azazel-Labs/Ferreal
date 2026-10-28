@@ -1,0 +1,5 @@
+target/
+
+# .NET build output (tests/exporter).
+bin/
+obj/

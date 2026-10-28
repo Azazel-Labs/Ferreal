@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Runs the Rivet exporter (unreal/Rivet/Source/RivetExporter) over a made-up session of
+       Unreal Header Tool (Fixture.cs), against a stand-in for UHT's API (UhtStub.cs): it
+       checks the exporter compiles, and writes the reflection data the mock engine test
+       reads (../mock-ue/RivetEngine.json). run.sh runs it. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="UhtStub.cs" />
+    <Compile Include="Fixture.cs" />
+    <Compile Include="../../unreal/Rivet/Source/RivetExporter/RivetExporter.cs" />
+  </ItemGroup>
+</Project>

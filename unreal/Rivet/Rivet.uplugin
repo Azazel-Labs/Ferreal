@@ -1,0 +1,17 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Rivet",
+	"Description": "Exports Unreal's reflection data for Rivet, which generates typed Rust bindings of the engine classes a crate names (rivet::engine!).",
+	"Category": "Programming",
+	"CreatedBy": "Azazel Labs",
+	"CanContainContent": false,
+	"Modules": [
+		{
+			"Name": "RivetMetadata",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}

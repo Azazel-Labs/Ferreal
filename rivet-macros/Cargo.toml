@@ -1,0 +1,19 @@
+[package]
+name = "rivet-macros"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Rivet's attribute macros: the Rust half of the glue between Rust and Unreal Engine (use them through the rivet crate)"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+rivet-model.workspace = true
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true
+
+[lints]
+workspace = true
