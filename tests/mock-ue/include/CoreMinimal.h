@@ -1,6 +1,6 @@
 // A stand-in for the few parts of Unreal Engine that Ferreal's generated C++ uses, so the
-// glue can be compiled, linked with the Rust and run without the engine (run.sh). It
-// imitates behavior only as far as the tests need. Not Unreal's code.
+// glue can be compiled, linked with the Rust and run without the engine (`cargo xtask
+// mock-ue`). It imitates behavior only as far as the tests need. Not Unreal's code.
 
 #pragma once
 

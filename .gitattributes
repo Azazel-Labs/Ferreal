@@ -1,0 +1,18 @@
+# LF everywhere, whatever core.autocrlf says: the build writes the generated C++ with LF, so
+# a CRLF checkout would show it as changed after every build.
+* text=auto eol=lf
+
+*.rs text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.h text eol=lf
+*.cpp text eol=lf
+*.cs text eol=lf
+*.csproj text eol=lf
+*.uplugin text eol=lf
+*.sh text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+LICENSE text eol=lf

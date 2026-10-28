@@ -233,7 +233,10 @@ build writes them again either way, and removes those it no longer generates.
 
 ## Testing without Unreal
 
-`tests/mock-ue/run.sh` builds the example, compiles its C++ (the hand-written parent and the
+The repository's tasks run on every platform through `cargo xtask` ([xtask](xtask/src/main.rs)):
+`test` runs `cargo test`, then the two below; `lint` runs rustfmt and Clippy.
+
+`cargo xtask mock-ue` builds the example, compiles its C++ (the hand-written parent and the
 generated glue) against minimal stand-ins for the engine headers it uses, links the Rust and
 runs a test that drives the class through the glue: properties of every type, functions,
 overrides, Rust calling C++, change notifications, a caught panic, destruction. It also calls the
@@ -242,7 +245,7 @@ parameters out the way the engine links functions, and whose natives read them t
 offsets: every kind of parameter and return value, static functions, and a function the mock
 engine declares differently, which the check must disable. The reflection data it builds
 from (`tests/mock-ue/FerrealEngine.json`) is the exporter's own output:
-`tests/exporter/run.sh` runs the exporter's source over a made-up session of Unreal Header
+`cargo xtask exporter` runs the exporter's source over a made-up session of Unreal Header
 Tool, against a stand-in for UHT's API (it needs the .NET SDK).
 
 These check the glue's C++, its ABI, and the exporter's logic, not Unreal's own tools

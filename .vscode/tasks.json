@@ -1,0 +1,79 @@
+{
+	"version": "2.0.0",
+	"options": {
+		"cwd": "${workspaceFolder}"
+	},
+	"tasks": [
+		{
+			"label": "cargo build",
+			"type": "shell",
+			"command": "cargo build --workspace",
+			"group": { "kind": "build", "isDefault": true },
+			"problemMatcher": ["$rustc"]
+		},
+		{
+			"label": "cargo check",
+			"type": "shell",
+			"command": "cargo check --workspace --all-targets",
+			"group": "build",
+			"problemMatcher": ["$rustc"]
+		},
+		{
+			"label": "cargo build (unreal profile)",
+			"detail": "The profile Unreal builds use: release, with unwinding",
+			"type": "shell",
+			"command": "cargo build --workspace --profile unreal",
+			"group": "build",
+			"problemMatcher": ["$rustc"]
+		},
+		{
+			"label": "cargo fmt",
+			"type": "shell",
+			"command": "cargo fmt --all",
+			"problemMatcher": []
+		},
+		{
+			"label": "cargo doc",
+			"type": "shell",
+			"command": "cargo doc --workspace --no-deps --open",
+			"problemMatcher": ["$rustc"]
+		},
+		{
+			"label": "cargo clean",
+			"type": "shell",
+			"command": "cargo clean",
+			"problemMatcher": []
+		},
+		{
+			"label": "xtask: test",
+			"detail": "cargo test, then the exporter and the mock engine test",
+			"type": "shell",
+			"command": "cargo xtask test",
+			"group": { "kind": "test", "isDefault": true },
+			"problemMatcher": ["$rustc", "$gcc", "$msCompile"]
+		},
+		{
+			"label": "xtask: mock-ue",
+			"detail": "Builds the hello example and runs its C++ against the mock engine headers",
+			"type": "shell",
+			"command": "cargo xtask mock-ue",
+			"group": "test",
+			"problemMatcher": ["$rustc", "$gcc"]
+		},
+		{
+			"label": "xtask: exporter",
+			"detail": "Runs the exporter over the made-up UHT session; rewrites tests/mock-ue/FerrealEngine.json (needs the .NET SDK)",
+			"type": "shell",
+			"command": "cargo xtask exporter",
+			"group": "test",
+			"problemMatcher": ["$msCompile"]
+		},
+		{
+			"label": "xtask: lint",
+			"detail": "rustfmt --check and Clippy, warnings as errors",
+			"type": "shell",
+			"command": "cargo xtask lint",
+			"problemMatcher": ["$rustc"]
+		}
+	]
+}

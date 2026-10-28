@@ -2,7 +2,7 @@
   <!-- Runs the Ferreal exporter (unreal/Ferreal/Source/FerrealExporter) over a made-up session of
        Unreal Header Tool (Fixture.cs), against a stand-in for UHT's API (UhtStub.cs): it
        checks the exporter compiles, and writes the reflection data the mock engine test
-       reads (../mock-ue/FerrealEngine.json). run.sh runs it. -->
+       reads (../mock-ue/FerrealEngine.json). `cargo xtask exporter` runs it. -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <OutputType>Exe</OutputType>
