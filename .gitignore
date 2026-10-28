@@ -3,3 +3,11 @@ target/
 # .NET build output (tests/exporter).
 bin/
 obj/
+
+# Unreal build output (tests/ue-host and the plugins it builds).
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+.vs/
+*.sln

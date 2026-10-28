@@ -310,6 +310,8 @@ public static class FerrealExporter
 			UhtEnumUnderlyingType.Uint32 => "uint32",
 			UhtEnumUnderlyingType.Int64 => "int64",
 			UhtEnumUnderlyingType.Uint64 => "uint64",
+			// `: int`: 32 bits on every platform Unreal supports.
+			UhtEnumUnderlyingType.Int => "int32",
 			_ => "unspecified",
 		});
 		WriteDoc(json, e);

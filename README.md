@@ -155,14 +155,15 @@ Name the engine classes a crate calls, by their C++ names, and their reflected f
 become typed Rust, generated from Unreal's own reflection data:
 
 ```rust
-ferreal::engine!(AActor, UPrimitiveComponent, UKismetStringLibrary);
+ferreal::engine!(AActor, UPrimitiveComponent, UKismetStringLibrary, UKismetSystemLibrary);
 
-use engine::{ActorApi, CollisionEnabled, KismetStringLibrary, PrimitiveComponentApi};
+use engine::{ActorApi, CollisionEnabled, KismetStringLibrary, KismetSystemLibrary, PrimitiveComponentApi};
 
 fn tidy(actor: Obj<engine::Actor>, mesh: Obj<engine::PrimitiveComponent>) -> String {
     actor.set_actor_hidden_in_game(true);
     mesh.set_collision_enabled(CollisionEnabled::QUERY_ONLY);
-    KismetStringLibrary::concat_str_str(&actor.get_actor_name_or_label(), " (hidden)")
+    let name = KismetSystemLibrary::get_display_name(Some(actor));
+    KismetStringLibrary::concat_str_str(&name, " (hidden)")
 }
 ```
 
@@ -206,7 +207,7 @@ The generated C++ sits in the module's `Source`, so the IDE project Unreal gener
 it too.
 
 Parameters: the types above, `FName` (as `&str`/`String`), `FRotator` (`Rotator`) and enums
-of one byte. Functions with output parameters (non-const references), arrays, other structs,
+(as `TEnumAsByte` or as themselves). Functions with output parameters (non-const references), arrays, other structs,
 `FText`, class references, soft and weak references, delegates or interfaces are left out
 for now; the generated file lists them with why.
 

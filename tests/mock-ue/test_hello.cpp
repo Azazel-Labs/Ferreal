@@ -29,7 +29,7 @@ struct FActorState
 	FVector Location{1.0, 2.0, 3.0};
 	bool bVisible = true;
 	bool bPropagate = false;
-	uint8 Collision = 0;
+	int32 Collision = 0;
 };
 static FActorState State;
 
@@ -76,6 +76,8 @@ struct FMockEngine
 	UClass Library{"BlueprintFunctionLibrary", &Object};
 	UClass Strings{"KismetStringLibrary", &Library};
 	UObject StringsDefault;
+	UClass System{"KismetSystemLibrary", &Library};
+	UObject SystemDefault;
 
 	FMockEngine()
 	{
@@ -86,15 +88,16 @@ struct FMockEngine
 		FerrealMockClasses()[u"/Script/Engine.PrimitiveComponent"] = &PrimitiveComponent;
 		FerrealMockClasses()[u"/Script/Engine.BlueprintFunctionLibrary"] = &Library;
 		FerrealMockClasses()[u"/Script/Engine.KismetStringLibrary"] = &Strings;
+		FerrealMockClasses()[u"/Script/Engine.KismetSystemLibrary"] = &System;
 		StringsDefault.MockClass = &Strings;
 		Strings.DefaultObject = &StringsDefault;
+		SystemDefault.MockClass = &System;
+		System.DefaultObject = &SystemDefault;
 
 		const int32 Str = sizeof(FString), StrAlign = alignof(FString);
 		const int32 Ptr = sizeof(UObject*);
 		AddFunction(Actor, "SetActorHiddenInGame", {Param("bNewHidden", "BoolProperty", 1, 1)},
 			[](UFunction& F, UObject*, uint8* P) { State.bHidden = F.Param<bool>(P, 0); });
-		AddFunction(Actor, "GetActorNameOrLabel", {Return("StrProperty", Str, StrAlign)},
-			[](UFunction& F, UObject* Self, uint8* P) { F.Param<FString>(P, 0) = FString(u"Rusty actor"); (void)Self; });
 		AddFunction(Actor, "K2_SetActorLocation",
 			{StructParam<FVector>("NewLocation", &Vector), Param("bSweep", "BoolProperty", 1, 1), StructParam<FVector>("SweepHitResult", &HitResult), Param("bTeleport", "BoolProperty", 1, 1), Return("BoolProperty", 1, 1)},
 			[](UFunction&, UObject*, uint8*) {});
@@ -115,14 +118,17 @@ struct FMockEngine
 		AddFunction(ActorComponent, "Activate", {Param("bReset", "BoolProperty", 1, 1)}, [](UFunction&, UObject*, uint8*) {});
 		AddFunction(SceneComponent, "SetVisibility", {Param("bNewVisibility", "BoolProperty", 1, 1), Param("bPropagateToChildren", "BoolProperty", 1, 1)},
 			[](UFunction& F, UObject*, uint8* P) { State.bVisible = F.Param<bool>(P, 0); State.bPropagate = F.Param<bool>(P, 1); });
-		AddFunction(PrimitiveComponent, "SetCollisionEnabled", {Param("NewType", "ByteProperty", 1, 1)},
-			[](UFunction& F, UObject*, uint8* P) { State.Collision = F.Param<uint8>(P, 0); });
-		AddFunction(PrimitiveComponent, "GetCollisionEnabled", {Return("ByteProperty", 1, 1)},
-			[](UFunction& F, UObject*, uint8* P) { F.Param<uint8>(P, 0) = State.Collision; });
+		// ECollisionEnabled::Type is an `enum Type : int` passed as itself: an EnumProperty of 4 bytes.
+		AddFunction(PrimitiveComponent, "SetCollisionEnabled", {Param("NewType", "EnumProperty", 4, 4)},
+			[](UFunction& F, UObject*, uint8* P) { State.Collision = F.Param<int32>(P, 0); });
+		AddFunction(PrimitiveComponent, "GetCollisionEnabled", {Return("EnumProperty", 4, 4)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<int32>(P, 0) = State.Collision; });
 		AddFunction(Strings, "Concat_StrStr", {Param("A", "StrProperty", Str, StrAlign), Param("B", "StrProperty", Str, StrAlign), Return("StrProperty", Str, StrAlign)},
 			[](UFunction& F, UObject* Self, uint8* P) { F.Param<FString>(P, 2) = FString(F.Param<FString>(P, 0).Str + F.Param<FString>(P, 1).Str); (void)Self; });
 		AddFunction(Strings, "Conv_IntToString", {Param("InInt", "IntProperty", 4, 4), Return("StrProperty", Str, StrAlign)},
 			[](UFunction& F, UObject*, uint8* P) { F.Param<FString>(P, 1) = FString::Printf(u"%d", F.Param<int32>(P, 0)); });
+		AddFunction(System, "GetDisplayName", {Param("Object", "ObjectProperty", Ptr, Ptr), Return("StrProperty", Str, StrAlign)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<FString>(P, 1) = FString(F.Param<UObject*>(P, 0) ? u"Rusty actor" : u"None"); });
 	}
 };
 

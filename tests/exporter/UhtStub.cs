@@ -49,7 +49,7 @@ namespace EpicGames.UHT.Types
 	public class UhtWeakObjectPtrProperty : UhtObjectPropertyBase { } public class UhtLazyObjectPtrProperty : UhtObjectPropertyBase { }
 	public class UhtInterfaceProperty : UhtProperty { }
 	public class UhtArrayProperty : UhtProperty { public UhtProperty ValueProperty; }
-	public enum UhtEnumUnderlyingType { Unspecified, Uint8, Int8, Int16, Uint16, Int32, Uint32, Int64, Uint64 }
+	public enum UhtEnumUnderlyingType { Unspecified, Uint8, Uint16, Uint32, Uint64, Int8, Int16, Int32, Int64, Int }
 	public class UhtEnumValue { public string Name = ""; public long Value; }
 	public class UhtEnum : UhtType { public UhtEnumUnderlyingType UnderlyingType; public List<UhtEnumValue> EnumValues = new(); }
 	public class UhtHeaderFile { public List<UhtType> Children = new(); public string IncludeFilePath; public string ModuleRelativeFilePath; }

@@ -1,0 +1,27 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Builds Ferreal's plugin and example in a real Unreal build (cargo xtask ue).",
+	"Modules": [
+		{
+			"Name": "FerrealHost",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "Ferreal",
+			"Enabled": true
+		},
+		{
+			"Name": "HelloRust",
+			"Enabled": true
+		},
+		{
+			"Name": "Fab",
+			"Enabled": false
+		}
+	]
+}

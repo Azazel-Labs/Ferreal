@@ -6,12 +6,14 @@
 //! | `exporter` | Runs the exporter over the made-up session of Unreal Header Tool, writing the mock engine's reflection data (needs the .NET SDK). |
 //! | `test` | `cargo test`, then `exporter` and `mock-ue`. |
 //! | `lint` | `cargo fmt --check` and `cargo clippy`, warnings as errors. |
+//! | `ue [--engine <dir>]` | Builds the host project (tests/ue-host), with the plugin and the example, in a real Unreal Engine. |
 
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
+use std::process::{self, Command, Stdio};
 
 type Result<T = ()> = std::result::Result<T, String>;
 
@@ -22,7 +24,10 @@ tasks:
                               (compiler: --cxx, else $CXX, else clang++ on Windows, c++ elsewhere)
   exporter                    run the exporter over the made-up UHT session (needs the .NET SDK)
   test                        cargo test, then exporter and mock-ue
-  lint                        cargo fmt --check and cargo clippy, warnings as errors";
+  lint                        cargo fmt --check and cargo clippy, warnings as errors
+  ue [--engine <dir>]         build tests/ue-host's editor target, with the Ferreal plugin and the
+                              example, in a real engine (engine: --engine, else $UE_ROOT, else
+                              the launcher's default UE_5.8)";
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -33,6 +38,8 @@ fn main() {
         ["exporter"] => exporter(),
         ["test"] => test(),
         ["lint"] => lint(),
+        ["ue"] => ue(None),
+        ["ue", "--engine", engine] => ue(Some(engine)),
         ["help" | "--help" | "-h"] | [] => {
             println!("{USAGE}");
             Ok(())
@@ -87,6 +94,100 @@ fn lint() -> Result {
     ]))
 }
 
+/// Builds the host project's editor target with Unreal Build Tool, its Plugins folder linking
+/// to the Ferreal plugin and the example. A build that exports reflection data the example
+/// had not had yet asks for another (see HelloRust.Build.cs), which this runs.
+fn ue(engine: Option<&str>) -> Result {
+    let root = root();
+    let engine = engine
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("UE_ROOT").map(PathBuf::from));
+    let engine = match engine {
+        Some(engine) => engine,
+        None if cfg!(windows) => PathBuf::from(r"C:\Program Files\Epic Games\UE_5.8"),
+        None if cfg!(target_os = "macos") => PathBuf::from("/Users/Shared/Epic Games/UE_5.8"),
+        None => return Err("no engine: pass --engine <dir> or set UE_ROOT".into()),
+    };
+    let batch_files = engine.join("Engine/Build/BatchFiles");
+    let (build, platform) = if cfg!(windows) {
+        (batch_files.join("Build.bat"), "Win64")
+    } else if cfg!(target_os = "macos") {
+        (batch_files.join("Mac/Build.sh"), "Mac")
+    } else {
+        (batch_files.join("Linux/Build.sh"), "Linux")
+    };
+    if !build.exists() {
+        return Err(format!(
+            "no engine at {} ({} is missing)",
+            engine.display(),
+            build.display()
+        ));
+    }
+
+    let host = root.join("tests/ue-host");
+    let plugins = host.join("Plugins");
+    fs::create_dir_all(&plugins)
+        .map_err(|e| format!("could not create {}: {e}", plugins.display()))?;
+    link_dir(&root.join("unreal/Ferreal"), &plugins.join("Ferreal"))?;
+    link_dir(&root.join("examples/hello"), &plugins.join("HelloRust"))?;
+
+    for _ in 0..2 {
+        let mut child = Command::new(&build)
+            .args(["FerrealHostEditor", platform, "Development", "-WaitMutex"])
+            .arg(format!(
+                "-Project={}",
+                host.join("FerrealHost.uproject").display()
+            ))
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("could not run {}: {e}", build.display()))?;
+        let mut again = false;
+        for line in BufReader::new(child.stdout.take().unwrap()).split(b'\n') {
+            let line = line.map_err(|e| format!("could not read the build's output: {e}"))?;
+            let line = String::from_utf8_lossy(&line);
+            again |= line.contains("Build again to generate the bindings");
+            println!("{}", line.trim_end());
+        }
+        let status = child
+            .wait()
+            .map_err(|e| format!("could not wait for the build: {e}"))?;
+        if !status.success() {
+            return Err(format!("the Unreal build failed ({status})"));
+        }
+        if !again {
+            return Ok(());
+        }
+        println!("xtask: building again, with the exported reflection data");
+    }
+    Err("the second build still had no reflection data for the example's engine classes".into())
+}
+
+/// Makes `link` a link to the directory `target` (a junction on Windows, which needs no
+/// privileges), unless it exists.
+fn link_dir(target: &Path, link: &Path) -> Result {
+    if link.exists() {
+        return Ok(());
+    }
+    // mklink takes backslashes only.
+    #[cfg(windows)]
+    run(Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(link.components().collect::<PathBuf>())
+        .arg(target.components().collect::<PathBuf>())
+        .stdout(Stdio::null()))?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).map_err(|e| {
+        format!(
+            "could not link {} to {}: {e}",
+            link.display(),
+            target.display()
+        )
+    })?;
+    Ok(())
+}
+
 /// Builds and runs the exporter over the made-up session (Fixture.cs), writing the reflection
 /// data the mock engine test reads.
 fn exporter() -> Result {
@@ -107,11 +208,13 @@ fn mock_ue(cxx: Option<&str>) -> Result {
     let module = root.join("examples/hello/Source/HelloRust");
     let target = env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
     let out = target.join("mock-ue");
+    // The glue and lock file of the mock engine's data, kept out of the example's (which are
+    // the real engine's); not cleaned, as cargo writes them only when they change.
+    let glue = target.join("mock-ue-glue");
 
     // The engine's reflection data comes from the exporter's output for the made-up session of
-    // tests/exporter (as an Unreal build passes FerrealEngine.json); the build refreshes the
-    // example's lock file from it. Building through `cargo rustc` also reports the system
-    // libraries the static library needs.
+    // tests/exporter (as an Unreal build passes FerrealEngine.json). Building through
+    // `cargo rustc` also reports the system libraries the static library needs.
     let build = cargo()
         .args([
             "rustc",
@@ -124,6 +227,8 @@ fn mock_ue(cxx: Option<&str>) -> Result {
         ])
         .args(["--", "--print", "native-static-libs"])
         .env("FERREAL_ENGINE_METADATA", here.join("FerrealEngine.json"))
+        .env("FERREAL_ENGINE_LOCK", glue.join("ferreal-engine.json"))
+        .env("FERREAL_OUTPUT", &glue)
         .output()
         .map_err(|e| format!("could not run cargo: {e}"))?;
     let stderr = String::from_utf8_lossy(&build.stderr);
@@ -149,7 +254,20 @@ fn mock_ue(cxx: Option<&str>) -> Result {
     }
     fs::create_dir_all(&generated)
         .map_err(|e| format!("could not create {}: {e}", generated.display()))?;
-    for header in files(&module.join("Public"), "h")? {
+    // The module's hand-written files, and the glue (its generated folders are the real
+    // engine's).
+    let hand_written = |dir: &str, extension| -> Result<Vec<PathBuf>> {
+        let dir = module.join(dir);
+        let generated = dir.join("Ferreal");
+        Ok(files(&dir, extension)?
+            .into_iter()
+            .filter(|f| !f.starts_with(&generated))
+            .collect())
+    };
+    let headers = hand_written("Public", "h")?
+        .into_iter()
+        .chain(files(&glue.join("Public"), "h")?);
+    for header in headers {
         let source = read(&header)?;
         let body = match parent_class(&source) {
             Some(parent) => format!("public: using Super = {parent}; private:"),
@@ -182,10 +300,16 @@ fn mock_ue(cxx: Option<&str>) -> Result {
         // Rust links the DLL C runtime; the clang driver would add the static one too.
         compile.args(["-fms-runtime-lib=dll", "-Xlinker", "/NODEFAULTLIB:libcmt"]);
     }
-    for include in [here.join("include"), generated, module.join("Public")] {
+    for include in [
+        here.join("include"),
+        generated,
+        glue.join("Public"),
+        module.join("Public"),
+    ] {
         compile.arg("-I").arg(include);
     }
-    compile.args(files(&module.join("Private"), "cpp")?);
+    compile.args(hand_written("Private", "cpp")?);
+    compile.args(files(&glue.join("Private"), "cpp")?);
     compile.arg(here.join("test_hello.cpp")).arg(lib);
     for native in native_libs.split_whitespace() {
         match native.strip_suffix(".lib") {

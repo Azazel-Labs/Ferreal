@@ -68,7 +68,7 @@ public static class Fixture
 		ubergraph.MetaData["BlueprintInternalUseOnly"] = "true";
 		obj.Functions.Add(ubergraph);
 
-		var collision = new UhtEnum { SourceName = "ECollisionEnabled", EngineName = "ECollisionEnabled", UnderlyingType = UhtEnumUnderlyingType.Unspecified };
+		var collision = new UhtEnum { SourceName = "ECollisionEnabled", EngineName = "ECollisionEnabled", UnderlyingType = UhtEnumUnderlyingType.Int };
 		collision.MetaData["ToolTip"] = "Enum used to describe what type of collision is enabled on a body.";
 		string[] modes = ["NoCollision", "QueryOnly", "PhysicsOnly", "QueryAndPhysics", "ProbeOnly", "QueryAndProbe"];
 		for (int i = 0; i < modes.Length; ++i)
@@ -84,7 +84,6 @@ public static class Fixture
 		hide.MetaData["ToolTip"] = "Sets the actor to be hidden in the game\n    @param bNewHidden Whether or not to hide the actor and all its components";
 		actor.Functions.AddRange([
 			hide,
-			Function("GetActorNameOrLabel", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Const, Ret<UhtStrProperty>()),
 			Function("K2_SetActorLocation", Callable, Ret<UhtBoolProperty>(),
 				Struct("NewLocation", "FVector"), Prop<UhtBoolProperty>("bSweep"),
 				Struct("SweepHitResult", "FHitResult", EPropertyFlags.OutParm | EPropertyFlags.ReferenceParm),
@@ -100,9 +99,10 @@ public static class Fixture
 		UhtClass component = Class("UActorComponent", obj, Function("Activate", Callable, null, Prop<UhtBoolProperty>("bReset")));
 		UhtClass scene = Class("USceneComponent", component,
 			Function("SetVisibility", Callable, null, Prop<UhtBoolProperty>("bNewVisibility"), Prop<UhtBoolProperty>("bPropagateToChildren")));
-		UhtByteProperty newType = Prop<UhtByteProperty>("NewType");
+		// `namespace ECollisionEnabled { enum Type : int }`, passed as itself (not a TEnumAsByte).
+		UhtEnumProperty newType = Prop<UhtEnumProperty>("NewType");
 		newType.Enum = collision;
-		UhtByteProperty current = Prop<UhtByteProperty>("ReturnValue");
+		UhtEnumProperty current = Prop<UhtEnumProperty>("ReturnValue");
 		current.Enum = collision;
 		UhtClass primitive = Class("UPrimitiveComponent", scene,
 			Function("SetCollisionEnabled", Callable, null, newType),
@@ -112,6 +112,10 @@ public static class Fixture
 		UhtClass strings = Class("UKismetStringLibrary", library,
 			Function("Concat_StrStr", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(), Prop<UhtStrProperty>("A"), Prop<UhtStrProperty>("B")),
 			Function("Conv_IntToString", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(), Prop<UhtIntProperty>("InInt")));
+		UhtObjectProperty named = Object("Object", obj);
+		named.PropertyFlags = EPropertyFlags.ConstParm;
+		UhtClass system = Class("UKismetSystemLibrary", library,
+			Function("GetDisplayName", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(), named));
 
 		// A class of the project (Rust's own: not bound).
 		UhtClass greeter = Class("UGreeter", obj, Function("Greet", Callable, Ret<UhtStrProperty>(), Prop<UhtStrProperty>("Punctuation")));
@@ -136,6 +140,7 @@ public static class Fixture
 				Header("Engine/EngineTypes.h", collision),
 				Header("Kismet/BlueprintFunctionLibrary.h", library),
 				Header("Kismet/KismetStringLibrary.h", strings),
+				Header("Kismet/KismetSystemLibrary.h", system),
 			],
 		});
 		session.Modules.Add(new UhtModule { ShortName = "HelloRust", Headers = [Header("Ferreal/Greeter.h", greeter)] });

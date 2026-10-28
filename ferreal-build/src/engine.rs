@@ -35,6 +35,11 @@ pub const METADATA_ENV: &str = "FERREAL_ENGINE_METADATA";
 pub const NEEDS_METADATA: &str = "FERREAL_NEEDS_ENGINE_METADATA";
 /// The lock file's name, next to the crate's `Cargo.toml`.
 pub const LOCK_FILE: &str = "ferreal-engine.json";
+/// A lock file to use instead of the crate's (for a build from other reflection data, such as
+/// a test's, that must not overwrite it).
+pub const LOCK_ENV: &str = "FERREAL_ENGINE_LOCK";
+/// A module directory to write the C++ into instead of the crate's (with [`LOCK_ENV`]).
+pub const OUTPUT_ENV: &str = "FERREAL_OUTPUT";
 
 fn is_false(b: &bool) -> bool {
     !*b
@@ -220,14 +225,94 @@ enum PTy {
     F64,
     Str,
     Name,
-    /// An enum with values of one byte, by its C++ name.
-    Enum(String),
+    /// An enum, by its C++ name: its values are `value`s (its Rust newtype's), held in the
+    /// parameter as `member`s (a byte for a TEnumAsByte, else the enum's own type).
+    Enum {
+        name: String,
+        value: Int,
+        member: Int,
+    },
     Vector,
     Vector2D,
     LinearColor,
     Rotator,
     /// An object of this C++ class.
     Obj(String),
+}
+
+/// An enum's integer type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Int {
+    U8,
+    I8,
+    U16,
+    I16,
+    U32,
+    I32,
+    U64,
+    I64,
+}
+
+impl Int {
+    /// An enum's underlying type as the exporter writes it; None for `unspecified`.
+    fn of_enum(underlying: &str) -> Option<Int> {
+        Some(match underlying {
+            "uint8" => Int::U8,
+            "int8" => Int::I8,
+            "uint16" => Int::U16,
+            "int16" => Int::I16,
+            "uint32" => Int::U32,
+            "int32" => Int::I32,
+            "uint64" => Int::U64,
+            "int64" => Int::I64,
+            _ => return None,
+        })
+    }
+
+    fn rust(self) -> &'static str {
+        match self {
+            Int::U8 => "u8",
+            Int::I8 => "i8",
+            Int::U16 => "u16",
+            Int::I16 => "i16",
+            Int::U32 => "u32",
+            Int::I32 => "i32",
+            Int::U64 => "u64",
+            Int::I64 => "i64",
+        }
+    }
+
+    fn cpp(self) -> &'static str {
+        match self {
+            Int::U8 => "uint8",
+            Int::I8 => "int8",
+            Int::U16 => "uint16",
+            Int::I16 => "int16",
+            Int::U32 => "uint32",
+            Int::I32 => "int32",
+            Int::U64 => "uint64",
+            Int::I64 => "int64",
+        }
+    }
+
+    fn holds(self, v: i64) -> bool {
+        match self {
+            Int::U8 => u8::try_from(v).is_ok(),
+            Int::I8 => i8::try_from(v).is_ok(),
+            Int::U16 => u16::try_from(v).is_ok(),
+            Int::I16 => i16::try_from(v).is_ok(),
+            Int::U32 => u32::try_from(v).is_ok(),
+            Int::I32 => i32::try_from(v).is_ok(),
+            Int::U64 => v >= 0,
+            Int::I64 => true,
+        }
+    }
+}
+
+/// The type of an enum's values in Rust: its own, or a byte for an old namespaced enum (only
+/// passed as a TEnumAsByte).
+fn enum_value_type(e: &EnumMeta) -> Int {
+    Int::of_enum(&e.underlying).unwrap_or(Int::U8)
 }
 
 #[derive(Clone, Debug)]
@@ -398,8 +483,8 @@ pub fn resolve(
                     for p in b.params.iter().chain(&b.ret) {
                         match &p.ty {
                             PTy::Obj(c) => needed.extend(ancestors(c)),
-                            PTy::Enum(e) => {
-                                used_enums.insert(e.clone());
+                            PTy::Enum { name, .. } => {
+                                used_enums.insert(name.clone());
                             }
                             _ => {}
                         }
@@ -574,11 +659,21 @@ fn param_type(
             let Some(e) = enums.get(name.as_str()) else {
                 return Err(format!("enum {name}, which was not exported"));
             };
-            // A TEnumAsByte (a ByteProperty) is a byte whatever the enum's type.
-            if t.property != "ByteProperty" && !matches!(e.underlying.as_str(), "uint8" | "int8") {
-                return Err(format!("enum {name}, of {} values", e.underlying));
+            let value = enum_value_type(e);
+            // A TEnumAsByte (a ByteProperty) is a byte whatever the enum's type; an
+            // EnumProperty holds the enum's own type, which an old namespaced enum leaves to
+            // the compiler.
+            let member = if t.property == "ByteProperty" {
+                Int::U8
+            } else {
+                Int::of_enum(&e.underlying)
+                    .ok_or_else(|| format!("enum {name}, of {} values", e.underlying))?
+            };
+            PTy::Enum {
+                name,
+                value,
+                member,
             }
-            PTy::Enum(name)
         }
         "struct" => match t.strukt.as_deref() {
             Some("FVector") => PTy::Vector,
@@ -660,7 +755,11 @@ fn constant_name(value: &str) -> String {
 /// indented code block).
 fn doc(out: &mut String, indent: &str, text: &str) {
     for line in text.lines() {
-        let line = line.trim().replace("```", "'''");
+        // No code fences: rustdoc would test what they hold.
+        let mut line = line.trim().replace("```", "'''");
+        if line.starts_with("~~~") {
+            line.insert(0, '\\');
+        }
         let _ = writeln!(out, "{indent}#[doc = {:?}]", line);
     }
 }
@@ -686,7 +785,7 @@ impl PTy {
             PTy::F32 => "f32".into(),
             PTy::F64 => "f64".into(),
             PTy::Str | PTy::Name => "::std::string::String".into(),
-            PTy::Enum(e) => enum_rust_name(b, e),
+            PTy::Enum { name, .. } => enum_rust_name(b, name),
             PTy::Vector => "::ferreal::Vector3".into(),
             PTy::Vector2D => "::ferreal::Vector2".into(),
             PTy::LinearColor => "::ferreal::LinearColor".into(),
@@ -699,7 +798,7 @@ impl PTy {
     fn rust_carrier_out(&self) -> String {
         match self {
             PTy::Str | PTy::Name => "::ferreal::ffi::Str8".into(),
-            PTy::Enum(_) => "u8".into(),
+            PTy::Enum { value, .. } => value.rust().into(),
             PTy::Obj(_) => "::ferreal::ffi::RawObj".into(),
             _ => self.rust_value_plain(),
         }
@@ -709,7 +808,7 @@ impl PTy {
     fn rust_carrier_in(&self) -> String {
         match self {
             PTy::Str | PTy::Name => "::ferreal::ffi::Str16".into(),
-            PTy::Enum(_) => "u8".into(),
+            PTy::Enum { value, .. } => value.rust().into(),
             PTy::Obj(_) => "::ferreal::ffi::RawObj".into(),
             _ => self.rust_value_plain(),
         }
@@ -737,7 +836,7 @@ impl PTy {
     fn rust_to_carrier(&self, v: &str) -> String {
         match self {
             PTy::Str | PTy::Name => format!("::ferreal::ffi::Str8::new({v})"),
-            PTy::Enum(_) => format!("{v}.0"),
+            PTy::Enum { .. } => format!("{v}.0"),
             PTy::Obj(_) => format!("{v}.map_or(::ferreal::ffi::RawObj::NULL, |o| o.raw())"),
             _ => v.into(),
         }
@@ -747,7 +846,7 @@ impl PTy {
     fn rust_from_carrier(&self, b: &Bindings, v: &str) -> String {
         match self {
             PTy::Str | PTy::Name => format!("{v}.to_string_lossy()"),
-            PTy::Enum(e) => format!("{}({v})", enum_rust_name(b, e)),
+            PTy::Enum { name, .. } => format!("{}({v})", enum_rust_name(b, name)),
             PTy::Obj(_) => format!("::ferreal::Obj::from_raw({v})"),
             _ => v.into(),
         }
@@ -759,7 +858,8 @@ impl PTy {
             PTy::Bool => "bool",
             PTy::I32 => "int32",
             PTy::I64 => "int64",
-            PTy::U8 | PTy::Enum(_) => "uint8",
+            PTy::U8 => "uint8",
+            PTy::Enum { member, .. } => member.cpp(),
             PTy::U32 => "uint32",
             PTy::F32 => "float",
             PTy::F64 => "double",
@@ -783,6 +883,7 @@ impl PTy {
             PTy::LinearColor => "Ferreal::FColor4",
             PTy::Rotator => "Ferreal::FRot",
             PTy::Obj(_) => "void*",
+            PTy::Enum { value, .. } => value.cpp(),
             t => t.cpp_member(),
         }
     }
@@ -797,6 +898,7 @@ impl PTy {
             PTy::LinearColor => format!("Ferreal::FromColor4({e})"),
             PTy::Rotator => format!("Ferreal::FromRot({e})"),
             PTy::Obj(_) => format!("static_cast<UObject*>({e})"),
+            PTy::Enum { member, .. } => format!("static_cast<{}>({e})", member.cpp()),
             _ => e.into(),
         }
     }
@@ -811,6 +913,7 @@ impl PTy {
             PTy::LinearColor => format!("Ferreal::ToColor4({e})"),
             PTy::Rotator => format!("Ferreal::ToRot({e})"),
             PTy::Obj(_) => format!("Ferreal::ToObj({e})"),
+            PTy::Enum { value, .. } => format!("static_cast<{}>({e})", value.cpp()),
             _ => e.into(),
         }
     }
@@ -871,21 +974,23 @@ impl Bindings {
                 o.push_str("///\n");
                 doc(&mut o, "", d);
             }
+            let value_type = enum_value_type(e);
             let _ = writeln!(
                 o,
-                "#[doc(alias = {:?})]\n#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]\n#[repr(transparent)]\npub struct {name}(pub u8);\n\nimpl {name} {{",
-                e.cpp
+                "#[doc(alias = {:?})]\n#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]\n#[repr(transparent)]\npub struct {name}(pub {});\n\nimpl {name} {{",
+                e.cpp,
+                value_type.rust()
             );
             let mut seen = BTreeSet::new();
             for v in &e.values {
-                // -1: a value Unreal Header Tool could not evaluate; values past a byte are
+                // -1: a value Unreal Header Tool could not evaluate; values past the type are
                 // `_MAX`-style markers.
-                let Ok(value) = u8::try_from(v.value) else {
+                if v.value == -1 || !value_type.holds(v.value) {
                     continue;
-                };
+                }
                 let c = constant_name(&v.name);
                 if seen.insert(c.clone()) {
-                    let _ = writeln!(o, "    pub const {c}: {name} = {name}({value});");
+                    let _ = writeln!(o, "    pub const {c}: {name} = {name}({});", v.value);
                 }
             }
             o.push_str("}\n");

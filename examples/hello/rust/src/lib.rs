@@ -9,7 +9,12 @@ ferreal::module!();
 
 // Engine classes this crate calls: ferreal-build generates their bindings (the `engine`
 // module) from Unreal's reflection data, kept in ferreal-engine.json.
-ferreal::engine!(AActor, UPrimitiveComponent, UKismetStringLibrary);
+ferreal::engine!(
+    AActor,
+    UPrimitiveComponent,
+    UKismetStringLibrary,
+    UKismetSystemLibrary
+);
 
 engine_class!(pub Texture = "UTexture2D" in "Engine/Texture2D.h");
 engine_class!(pub Notifier = "UHelloBase" in "HelloBase.h", bases(Notify));
@@ -187,7 +192,8 @@ pub fn shout(text: &str, notifier: Option<Obj<Notifier>>) -> String {
 #[export]
 pub fn poke(actor: Obj<engine::Actor>, component: Obj<engine::PrimitiveComponent>) -> String {
     use engine::{
-        ActorApi, CollisionEnabled, KismetStringLibrary, PrimitiveComponentApi, SceneComponentApi,
+        ActorApi, CollisionEnabled, KismetStringLibrary, KismetSystemLibrary,
+        PrimitiveComponentApi, SceneComponentApi,
     };
 
     actor.set_actor_hidden_in_game(true);
@@ -201,9 +207,9 @@ pub fn poke(actor: Obj<engine::Actor>, component: Obj<engine::PrimitiveComponent
     let collision = component.get_collision_enabled();
     // Declared with a float by the bindings, a double by the (mock) engine: disabled, 0.
     let age = actor.get_game_time_since_creation();
-    let number = KismetStringLibrary::conv_int_to_string(i32::from(collision.0));
+    let number = KismetStringLibrary::conv_int_to_string(collision.0);
     KismetStringLibrary::concat_str_str(
-        &actor.get_actor_name_or_label(),
+        &KismetSystemLibrary::get_display_name(Some(actor)),
         &format!(
             " own={own} turned={turned} z={} tagged={tagged} collision={number} age={age}",
             at.z

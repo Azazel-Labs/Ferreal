@@ -406,7 +406,7 @@ impl Module {
     }
 
     /// The lock file of the engine classes used, relative to the crate (default
-    /// `ferreal-engine.json`).
+    /// `ferreal-engine.json`). `FERREAL_ENGINE_LOCK`, if set, overrides it.
     pub fn engine_lock(mut self, path: impl Into<PathBuf>) -> Self {
         self.lock = path.into();
         self
@@ -420,6 +420,7 @@ impl Module {
 
     /// The Unreal module's directory (with its `Public` and `Private` folders), relative to
     /// the crate. Without one, nothing is written (the macros still get the module name).
+    /// `FERREAL_OUTPUT`, if set, overrides it.
     pub fn output(mut self, dir: impl Into<PathBuf>) -> Self {
         self.output = Some(dir.into());
         self
@@ -448,6 +449,8 @@ impl Module {
         );
         println!("cargo:rerun-if-changed=build.rs");
         println!("cargo:rerun-if-env-changed={}", engine::METADATA_ENV);
+        println!("cargo:rerun-if-env-changed={}", engine::LOCK_ENV);
+        println!("cargo:rerun-if-env-changed={}", engine::OUTPUT_ENV);
         let crate_dir =
             std::env::var_os("CARGO_MANIFEST_DIR").map_or_else(PathBuf::new, PathBuf::from);
         let root = crate_dir.join(&self.root);
@@ -458,7 +461,10 @@ impl Module {
 
         // The engine bindings. Without the data they need, the rest is still written (so the
         // Unreal build that exports the data can run), and the error reported after.
-        let lock = crate_dir.join(&self.lock);
+        let lock = match std::env::var_os(engine::LOCK_ENV).filter(|p| !p.is_empty()) {
+            Some(p) => PathBuf::from(p),
+            None => crate_dir.join(&self.lock),
+        };
         let (bindings, engine_errors) = match engine_bindings(&model, &lock) {
             Ok(b) => (b, Vec::new()),
             Err(e) => (engine::Bindings::default(), e),
@@ -478,15 +484,18 @@ impl Module {
             return Err(Error(engine_errors));
         }
 
-        if let Some(output) = &self.output {
-            let output = crate_dir.join(output);
+        let output = std::env::var_os(engine::OUTPUT_ENV)
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| self.output.as_ref().map(|o| crate_dir.join(o)));
+        if let Some(output) = &output {
             let api = self
                 .api
                 .clone()
                 .unwrap_or_else(|| format!("{}_API", self.name.to_uppercase()));
             let source = std::env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "the crate".into());
             let files = generate(&self.name, &api, &source, &model, &bindings)?;
-            write_files(&output, &files)
+            write_files(output, &files)
                 .map_err(|e| Error(vec![format!("{}: {e}", output.display())]))?;
         }
         if engine_errors.is_empty() {

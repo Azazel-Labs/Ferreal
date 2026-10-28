@@ -35,7 +35,7 @@ public class HelloRust : ModuleRules
 	/// </summary>
 	private void BuildRust(ReadOnlyTargetRules Target, string CrateDir, string LibraryName, string Profile)
 	{
-		CrateDir = Path.GetFullPath(CrateDir);
+		CrateDir = ResolveLinks(Path.GetFullPath(CrateDir));
 		string Triple;
 		string FileName;
 		if (Target.Platform == UnrealTargetPlatform.Win64)
@@ -67,11 +67,13 @@ public class HelloRust : ModuleRules
 
 		// The engine's reflection data, for the classes ferreal::engine! names: what the Ferreal
 		// plugin's exporter wrote during the last build (Unreal Header Tool runs after this
-		// file). A new export makes the next build run this file, and cargo, again.
-		string Metadata = FindEngineMetadata(Target);
-		if (Metadata != null)
+		// file). A new export makes the next build run this file, and cargo, again; so does
+		// the first, through the file it will write (a dependency that does not exist runs
+		// this file in every build until it does).
+		string Metadata = FindEngineMetadata(Target, out string FirstExport);
+		if (Metadata != null || FirstExport != null)
 		{
-			ExternalDependencies.Add(Metadata);
+			ExternalDependencies.Add(Metadata ?? FirstExport);
 		}
 		if (Environment.GetEnvironmentVariable("FERREAL_SKIP_CARGO") != "1")
 		{
@@ -106,12 +108,34 @@ public class HelloRust : ModuleRules
 	}
 
 	/// <summary>
+	/// Dir with the links among it and its parents resolved: in a plugin linked into the
+	/// project's Plugins folder (a symbolic link, a junction), cargo would otherwise find the
+	/// crate's workspace by walking up the link's path, not the crate's.
+	/// </summary>
+	private static string ResolveLinks(string Dir)
+	{
+		string Below = null;
+		for (DirectoryInfo Info = new DirectoryInfo(Dir); Info != null; Info = Info.Parent)
+		{
+			FileSystemInfo Link = Info.LinkTarget != null ? Info.ResolveLinkTarget(true) : null;
+			if (Link != null)
+			{
+				return ResolveLinks(Below == null ? Link.FullName : Path.Combine(Link.FullName, Below));
+			}
+			Below = Below == null ? Info.Name : Path.Combine(Info.Name, Below);
+		}
+		return Dir;
+	}
+
+	/// <summary>
 	/// The newest FerrealEngine.json the Ferreal plugin's exporter wrote (in its FerrealMetadata
 	/// module's generated folder), in the project's plugins; FERREAL_ENGINE_METADATA, if set,
-	/// instead. Null without either.
+	/// instead. Null without either; FirstExport is then where this editor build's export will
+	/// be (the exporter runs in editor builds only, FerrealMetadata being an editor module).
 	/// </summary>
-	private static string FindEngineMetadata(ReadOnlyTargetRules Target)
+	private static string FindEngineMetadata(ReadOnlyTargetRules Target, out string FirstExport)
 	{
+		FirstExport = null;
 		string Set = Environment.GetEnvironmentVariable("FERREAL_ENGINE_METADATA");
 		if (!string.IsNullOrEmpty(Set))
 		{
@@ -131,6 +155,13 @@ public class HelloRust : ModuleRules
 		foreach (string Descriptor in Directory.EnumerateFiles(Plugins, "Ferreal.uplugin", SearchOption.AllDirectories))
 		{
 			string Build = Path.Combine(Path.GetDirectoryName(Descriptor), "Intermediate", "Build");
+			if (Target.Type == TargetType.Editor && FirstExport == null)
+			{
+				// Unreal Build Tool's intermediate folder: the app's name in the shared build
+				// environment, the target's in a unique one.
+				string App = Target.BuildEnvironment == TargetBuildEnvironment.Shared ? "UnrealEditor" : Target.Name;
+				FirstExport = Path.Combine(Build, Target.Platform.ToString(), App, "Inc", "FerrealMetadata", "UHT", "FerrealEngine.json");
+			}
 			if (!Directory.Exists(Build))
 			{
 				continue;
@@ -144,6 +175,10 @@ public class HelloRust : ModuleRules
 					NewestTime = Time;
 				}
 			}
+		}
+		if (Newest != null)
+		{
+			FirstExport = null;
 		}
 		return Newest;
 	}
