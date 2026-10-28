@@ -10,11 +10,11 @@ out="$root/target/mock-ue"
 module="$root/examples/hello/Source/HelloRust"
 
 # The engine's reflection data comes from the exporter's output for the made-up session of
-# tests/exporter (as an Unreal build passes RivetEngine.json); the build refreshes the
+# tests/exporter (as an Unreal build passes FerrealEngine.json); the build refreshes the
 # example's lock file from it.
-RIVET_ENGINE_METADATA="$here/RivetEngine.json" \
-	cargo build --manifest-path "$root/Cargo.toml" -p rivet-hello --quiet
-lib="$root/target/debug/librivet_hello.a"
+FERREAL_ENGINE_METADATA="$here/FerrealEngine.json" \
+	cargo build --manifest-path "$root/Cargo.toml" -p ferreal-hello --quiet
+lib="$root/target/debug/libferreal_hello.a"
 
 # Unreal Header Tool's generated headers, imitated: each defines GENERATED_BODY with the
 # class' Super.

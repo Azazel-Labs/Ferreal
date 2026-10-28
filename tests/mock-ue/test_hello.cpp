@@ -1,7 +1,7 @@
 // Drives the example's UGreeter (Rust) through the generated C++ glue, in the mock engine.
 
-#include "Rivet/Greeter.h"
-#include "Rivet/RivetHelloRust.h"
+#include "Ferreal/Greeter.h"
+#include "Ferreal/FerrealHelloRust.h"
 #include "Components/PrimitiveComponent.h"
 #include "Engine/Texture2D.h"
 #include "GameFramework/Actor.h"
@@ -16,10 +16,10 @@ static const std::string Unicode = "\xc3\x9c" "n" "\xc3\xaf" "c" "\xc3\xb8" "d" 
 
 #define EXPECT(Cond) do { if (!(Cond)) { std::printf("FAILED line %d: %s\n", __LINE__, #Cond); ++Failures; } } while (0)
 
-// The mock engine's reflected functions: the classes and functions of RivetEngine.json (the
+// The mock engine's reflected functions: the classes and functions of FerrealEngine.json (the
 // exporter's output for tests/exporter/Fixture.cs), registered the way the engine links
 // them. The natives read and write their parameters through the properties' offsets, as
-// the engine's thunks do, not through the structs Rivet generates.
+// the engine's thunks do, not through the structs Ferreal generates.
 
 struct FActorState
 {
@@ -79,13 +79,13 @@ struct FMockEngine
 
 	FMockEngine()
 	{
-		RivetMockClasses()[u"/Script/CoreUObject.Object"] = &Object;
-		RivetMockClasses()[u"/Script/Engine.Actor"] = &Actor;
-		RivetMockClasses()[u"/Script/Engine.ActorComponent"] = &ActorComponent;
-		RivetMockClasses()[u"/Script/Engine.SceneComponent"] = &SceneComponent;
-		RivetMockClasses()[u"/Script/Engine.PrimitiveComponent"] = &PrimitiveComponent;
-		RivetMockClasses()[u"/Script/Engine.BlueprintFunctionLibrary"] = &Library;
-		RivetMockClasses()[u"/Script/Engine.KismetStringLibrary"] = &Strings;
+		FerrealMockClasses()[u"/Script/CoreUObject.Object"] = &Object;
+		FerrealMockClasses()[u"/Script/Engine.Actor"] = &Actor;
+		FerrealMockClasses()[u"/Script/Engine.ActorComponent"] = &ActorComponent;
+		FerrealMockClasses()[u"/Script/Engine.SceneComponent"] = &SceneComponent;
+		FerrealMockClasses()[u"/Script/Engine.PrimitiveComponent"] = &PrimitiveComponent;
+		FerrealMockClasses()[u"/Script/Engine.BlueprintFunctionLibrary"] = &Library;
+		FerrealMockClasses()[u"/Script/Engine.KismetStringLibrary"] = &Strings;
 		StringsDefault.MockClass = &Strings;
 		Strings.DefaultObject = &StringsDefault;
 
@@ -128,7 +128,7 @@ struct FMockEngine
 
 static bool Logged(const std::string& Text)
 {
-	for (const std::string& L : GRivetMockLogs)
+	for (const std::string& L : GFerrealMockLogs)
 	{
 		if (L.find(Text) != std::string::npos) return true;
 	}
@@ -189,27 +189,27 @@ int main()
 
 	// A panic is caught at the boundary and logged.
 	EXPECT(G->Panics() == 0);
-	EXPECT(ToUtf8(GRivetMockLastLog).find("on purpose") != std::string::npos);
+	EXPECT(ToUtf8(GFerrealMockLastLog).find("on purpose") != std::string::npos);
 	EXPECT(ToUtf8(G->Greet(TEXT("!"))) == std::string("Hello, ") + Unicode + "! #104");
 
 	// Exported functions, with an object handle.
-	EXPECT(ToUtf8(Rivet::HelloRust::Shout(TEXT("hey"), G)) == "HEY");
+	EXPECT(ToUtf8(Ferreal::HelloRust::Shout(TEXT("hey"), G)) == "HEY");
 	EXPECT(ToUtf8(G->LastMessage) == "HEY" && G->LastSum == 0.0f);
-	EXPECT(ToUtf8(Rivet::HelloRust::Shout(TEXT("quiet"), nullptr)) == "QUIET");
+	EXPECT(ToUtf8(Ferreal::HelloRust::Shout(TEXT("quiet"), nullptr)) == "QUIET");
 
-	// Engine functions through the generated bindings (rivet::engine!): reflected calls with
+	// Engine functions through the generated bindings (ferreal::engine!): reflected calls with
 	// their parameters checked against the engine's reflection first.
 	AActor* Actor = new AActor();
 	Actor->MockClass = &Engine.Actor;
 	UPrimitiveComponent* Component = new UPrimitiveComponent();
 	Component->MockClass = &Engine.PrimitiveComponent;
-	const std::string Report = ToUtf8(Rivet::HelloRust::Poke(Actor, Component));
+	const std::string Report = ToUtf8(Ferreal::HelloRust::Poke(Actor, Component));
 	EXPECT(Report == "Rusty actor own=true turned=true z=3 tagged=true collision=3 age=0");
 	EXPECT(State.bHidden && State.Owner == Actor && State.Rotation.Yaw == 20.0 && State.Rotation.Roll == 30.0);
 	EXPECT(!State.bVisible && State.bPropagate && State.Collision == 3);
 	EXPECT(Logged("/Script/Engine.Actor.GetGameTimeSinceCreation cannot be called from Rust"));
 	// An object of the wrong class is refused, not called.
-	EXPECT(ToUtf8(Rivet::HelloRust::Poke(reinterpret_cast<AActor*>(Component), Component)).find("own=false") != std::string::npos
+	EXPECT(ToUtf8(Ferreal::HelloRust::Poke(reinterpret_cast<AActor*>(Component), Component)).find("own=false") != std::string::npos
 		|| Logged("which is not a valid Actor"));
 	delete Actor;
 	delete Component;

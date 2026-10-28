@@ -1,0 +1,15 @@
+[package]
+name = "ferreal-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Ferreal's model of Unreal-facing Rust items: what ferreal-macros and ferreal-build both read, so the Rust and C++ halves of the glue always agree"
+
+[dependencies]
+syn.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+
+[lints]
+workspace = true

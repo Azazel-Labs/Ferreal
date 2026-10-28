@@ -1,4 +1,4 @@
-// A stand-in for the few parts of Unreal Engine that Rivet's generated C++ uses, so the
+// A stand-in for the few parts of Unreal Engine that Ferreal's generated C++ uses, so the
 // glue can be compiled, linked with the Rust and run without the engine (run.sh). It
 // imitates behavior only as far as the tests need. Not Unreal's code.
 
@@ -238,16 +238,16 @@ struct FRotator
 };
 
 /** What UE_LOG printed (the last line, and all of them), for the tests. */
-inline FString GRivetMockLastLog;
-inline std::vector<std::string> GRivetMockLogs;
-inline void RivetMockLog(const char* Verbosity, const TCHAR* Text)
+inline FString GFerrealMockLastLog;
+inline std::vector<std::string> GFerrealMockLogs;
+inline void FerrealMockLog(const char* Verbosity, const TCHAR* Text)
 {
-	GRivetMockLastLog = FString(Text);
-	GRivetMockLogs.push_back(ToUtf8(GRivetMockLastLog));
-	std::printf("[%s] %s\n", Verbosity, GRivetMockLogs.back().c_str());
+	GFerrealMockLastLog = FString(Text);
+	GFerrealMockLogs.push_back(ToUtf8(GFerrealMockLastLog));
+	std::printf("[%s] %s\n", Verbosity, GFerrealMockLogs.back().c_str());
 }
 #define DEFINE_LOG_CATEGORY_STATIC(Name, Default, Compiled) [[maybe_unused]] static int Name = 0;
-#define UE_LOG(Category, Verbosity, Format, ...) ((void)Category, RivetMockLog(#Verbosity, *FString::Printf(Format, ##__VA_ARGS__)))
+#define UE_LOG(Category, Verbosity, Format, ...) ((void)Category, FerrealMockLog(#Verbosity, *FString::Printf(Format, ##__VA_ARGS__)))
 
 struct FObjectInitializer {};
 
@@ -386,7 +386,7 @@ public:
 };
 
 /** The classes FindObject finds, by path. */
-inline std::map<std::u16string, UClass*>& RivetMockClasses()
+inline std::map<std::u16string, UClass*>& FerrealMockClasses()
 {
 	static std::map<std::u16string, UClass*> Classes;
 	return Classes;
@@ -395,8 +395,8 @@ inline std::map<std::u16string, UClass*>& RivetMockClasses()
 template <typename T>
 T* FindObject(UObject*, const TCHAR* Path)
 {
-	auto It = RivetMockClasses().find(Path);
-	return It == RivetMockClasses().end() ? nullptr : It->second;
+	auto It = FerrealMockClasses().find(Path);
+	return It == FerrealMockClasses().end() ? nullptr : It->second;
 }
 
 class UObject

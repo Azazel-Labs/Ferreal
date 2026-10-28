@@ -1,5 +1,5 @@
 #include "Modules/ModuleManager.h"
-#include "Rivet/RivetHelloRust.h"
+#include "Ferreal/FerrealHelloRust.h"
 
 class FHelloRustModule : public IModuleInterface
 {
@@ -8,7 +8,7 @@ public:
 	{
 		// Optional: the generated classes register on first use; this makes exported
 		// functions callable from anywhere at once.
-		Rivet::HelloRust::Register();
+		Ferreal::HelloRust::Register();
 	}
 };
 

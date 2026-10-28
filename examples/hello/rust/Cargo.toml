@@ -1,21 +1,21 @@
 [package]
-name = "rivet-hello"
+name = "ferreal-hello"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Rivet's example: a UCLASS written in Rust, built into the RivetHello Unreal module"
+description = "Ferreal's example: a UCLASS written in Rust, built into the FerrealHello Unreal module"
 
 [lib]
 # The Unreal module links the static library.
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-rivet.workspace = true
+ferreal.workspace = true
 
 [build-dependencies]
-rivet-build.workspace = true
+ferreal-build.workspace = true
 
 [lints]
 workspace = true

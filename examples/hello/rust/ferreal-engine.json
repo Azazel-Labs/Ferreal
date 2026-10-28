@@ -1,0 +1,456 @@
+{
+  "format": "ferreal-engine",
+  "version": 1,
+  "classes": [
+    {
+      "cpp": "UObject",
+      "path": "/Script/CoreUObject.Object",
+      "module": "CoreUObject",
+      "header": "UObject/Object.h",
+      "functions": [
+        {
+          "cpp": "ExecuteUbergraph",
+          "name": "ExecuteUbergraph",
+          "internal": true,
+          "params": [
+            {
+              "name": "EntryPoint",
+              "type": {
+                "kind": "int32",
+                "property": "IntProperty"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "cpp": "AActor",
+      "path": "/Script/Engine.Actor",
+      "module": "Engine",
+      "header": "GameFramework/Actor.h",
+      "super": "UObject",
+      "doc": "Actor is the base class for an Object that can be placed or spawned in a level.",
+      "functions": [
+        {
+          "cpp": "SetActorHiddenInGame",
+          "name": "SetActorHiddenInGame",
+          "callable": true,
+          "doc": "Sets the actor to be hidden in the game\n    @param bNewHidden Whether or not to hide the actor and all its components",
+          "params": [
+            {
+              "name": "bNewHidden",
+              "type": {
+                "kind": "bool",
+                "property": "BoolProperty"
+              }
+            }
+          ]
+        },
+        {
+          "cpp": "GetActorNameOrLabel",
+          "name": "GetActorNameOrLabel",
+          "const": true,
+          "callable": true,
+          "pure": true,
+          "params": [
+            {
+              "name": "ReturnValue",
+              "type": {
+                "kind": "string",
+                "property": "StrProperty"
+              },
+              "ret": true
+            }
+          ]
+        },
+        {
+          "cpp": "K2_SetActorLocation",
+          "name": "K2_SetActorLocation",
+          "callable": true,
+          "params": [
+            {
+              "name": "NewLocation",
+              "type": {
+                "kind": "struct",
+                "property": "StructProperty",
+                "struct": "FVector"
+              }
+            },
+            {
+              "name": "bSweep",
+              "type": {
+                "kind": "bool",
+                "property": "BoolProperty"
+              }
+            },
+            {
+              "name": "SweepHitResult",
+              "type": {
+                "kind": "struct",
+                "property": "StructProperty",
+                "struct": "FHitResult"
+              },
+              "out": true,
+              "ref": true
+            },
+            {
+              "name": "bTeleport",
+              "type": {
+                "kind": "bool",
+                "property": "BoolProperty"
+              }
+            },
+            {
+              "name": "ReturnValue",
+              "type": {
+                "kind": "bool",
+                "property": "BoolProperty"
+              },
+              "ret": true
+            }
+          ]
+        },
+        {
+          "cpp": "K2_SetActorRotation",
+          "name": "K2_SetActorRotation",
+          "callable": true,
+          "params": [
+            {
+              "name": "NewRotation",
+              "type": {
+                "kind": "struct",
+                "property": "StructProperty",
+                "struct": "FRotator"
+              }
+            },
+            {
+              "name": "bTeleportPhysics",
+              "type": {
+                "kind": "bool",
+                "property": "BoolProperty"
+              }
+            },
+            {
+              "name": "ReturnValue",
+              "type": {
+                "kind": "bool",
+                "property": "BoolProperty"
+              },
+              "ret": true
+            }
+          ]
+        },
+        {
+          "cpp": "K2_GetActorLocation",
+          "name": "K2_GetActorLocation",
+          "const": true,
+          "callable": true,
+          "pure": true,
+          "params": [
+            {
+              "name": "ReturnValue",
+              "type": {
+                "kind": "struct",
+                "property": "StructProperty",
+                "struct": "FVector"
+              },
+              "ret": true
+            }
+          ]
+        },
+        {
+          "cpp": "GetOwner",
+          "name": "GetOwner",
+          "const": true,
+          "callable": true,
+          "pure": true,
+          "params": [
+            {
+              "name": "ReturnValue",
+              "type": {
+                "kind": "object",
+                "property": "ObjectProperty",
+                "class": "AActor"
+              },
+              "ret": true
+            }
+          ]
+        },
+        {
+          "cpp": "SetOwner",
+          "name": "SetOwner",
+          "callable": true,
+          "params": [
+            {
+              "name": "NewOwner",
+              "type": {
+                "kind": "object",
+                "property": "ObjectProperty",
+                "class": "AActor"
+              }
+            }
+          ]
+        },
+        {
+          "cpp": "ActorHasTag",
+          "name": "ActorHasTag",
+          "const": true,
+          "callable": true,
+          "pure": true,
+          "params": [
+            {
+              "name": "Tag",
+              "type": {
+                "kind": "name",
+                "property": "NameProperty"
+              }
+            },
+            {
+              "name": "ReturnValue",
+              "type": {
+                "kind": "bool",
+                "property": "BoolProperty"
+              },
+              "ret": true
+            }
+          ]
+        },
+        {
+          "cpp": "GetGameTimeSinceCreation",
+          "name": "GetGameTimeSinceCreation",
+          "const": true,
+          "callable": true,
+          "pure": true,
+          "params": [
+            {
+              "name": "ReturnValue",
+              "type": {
+                "kind": "float",
+                "property": "FloatProperty"
+              },
+              "ret": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "cpp": "UActorComponent",
+      "path": "/Script/Engine.ActorComponent",
+      "module": "Engine",
+      "header": "Components/ActorComponent.h",
+      "super": "UObject",
+      "functions": [
+        {
+          "cpp": "Activate",
+          "name": "Activate",
+          "callable": true,
+          "params": [
+            {
+              "name": "bReset",
+              "type": {
+                "kind": "bool",
+                "property": "BoolProperty"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "cpp": "UBlueprintFunctionLibrary",
+      "path": "/Script/Engine.BlueprintFunctionLibrary",
+      "module": "Engine",
+      "header": "Kismet/BlueprintFunctionLibrary.h",
+      "super": "UObject",
+      "functions": []
+    },
+    {
+      "cpp": "UGreeter",
+      "path": "/Script/HelloRust.Greeter",
+      "module": "HelloRust",
+      "header": "Ferreal/Greeter.h",
+      "super": "UObject",
+      "functions": []
+    },
+    {
+      "cpp": "UKismetStringLibrary",
+      "path": "/Script/Engine.KismetStringLibrary",
+      "module": "Engine",
+      "header": "Kismet/KismetStringLibrary.h",
+      "super": "UBlueprintFunctionLibrary",
+      "functions": [
+        {
+          "cpp": "Concat_StrStr",
+          "name": "Concat_StrStr",
+          "static": true,
+          "callable": true,
+          "pure": true,
+          "params": [
+            {
+              "name": "A",
+              "type": {
+                "kind": "string",
+                "property": "StrProperty"
+              }
+            },
+            {
+              "name": "B",
+              "type": {
+                "kind": "string",
+                "property": "StrProperty"
+              }
+            },
+            {
+              "name": "ReturnValue",
+              "type": {
+                "kind": "string",
+                "property": "StrProperty"
+              },
+              "ret": true
+            }
+          ]
+        },
+        {
+          "cpp": "Conv_IntToString",
+          "name": "Conv_IntToString",
+          "static": true,
+          "callable": true,
+          "pure": true,
+          "params": [
+            {
+              "name": "InInt",
+              "type": {
+                "kind": "int32",
+                "property": "IntProperty"
+              }
+            },
+            {
+              "name": "ReturnValue",
+              "type": {
+                "kind": "string",
+                "property": "StrProperty"
+              },
+              "ret": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "cpp": "USceneComponent",
+      "path": "/Script/Engine.SceneComponent",
+      "module": "Engine",
+      "header": "Components/SceneComponent.h",
+      "super": "UActorComponent",
+      "functions": [
+        {
+          "cpp": "SetVisibility",
+          "name": "SetVisibility",
+          "callable": true,
+          "params": [
+            {
+              "name": "bNewVisibility",
+              "type": {
+                "kind": "bool",
+                "property": "BoolProperty"
+              }
+            },
+            {
+              "name": "bPropagateToChildren",
+              "type": {
+                "kind": "bool",
+                "property": "BoolProperty"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "cpp": "UPrimitiveComponent",
+      "path": "/Script/Engine.PrimitiveComponent",
+      "module": "Engine",
+      "header": "Components/PrimitiveComponent.h",
+      "super": "USceneComponent",
+      "functions": [
+        {
+          "cpp": "SetCollisionEnabled",
+          "name": "SetCollisionEnabled",
+          "callable": true,
+          "params": [
+            {
+              "name": "NewType",
+              "type": {
+                "kind": "enum",
+                "property": "ByteProperty",
+                "enum": "ECollisionEnabled"
+              }
+            }
+          ]
+        },
+        {
+          "cpp": "GetCollisionEnabled",
+          "name": "GetCollisionEnabled",
+          "const": true,
+          "callable": true,
+          "pure": true,
+          "params": [
+            {
+              "name": "ReturnValue",
+              "type": {
+                "kind": "enum",
+                "property": "ByteProperty",
+                "enum": "ECollisionEnabled"
+              },
+              "ret": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "cpp": "ECollisionEnabled",
+      "path": "/Script/Engine.ECollisionEnabled",
+      "underlying": "unspecified",
+      "doc": "Enum used to describe what type of collision is enabled on a body.",
+      "values": [
+        {
+          "name": "NoCollision",
+          "value": 0
+        },
+        {
+          "name": "QueryOnly",
+          "value": 1
+        },
+        {
+          "name": "PhysicsOnly",
+          "value": 2
+        },
+        {
+          "name": "QueryAndPhysics",
+          "value": 3
+        },
+        {
+          "name": "ProbeOnly",
+          "value": 4
+        },
+        {
+          "name": "QueryAndProbe",
+          "value": 5
+        },
+        {
+          "name": "ECollisionEnabled_MAX",
+          "value": 6
+        },
+        {
+          "name": "Computed",
+          "value": -1
+        }
+      ]
+    }
+  ]
+}

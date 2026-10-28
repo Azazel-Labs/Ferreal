@@ -1,15 +1,15 @@
-//! Rivet's example: `UGreeter`, a `UCLASS` written in Rust, with every kind of property,
-//! function and hook Rivet supports, and calls into engine classes through the generated
-//! bindings (`poke`). The C++ it needs is in `../Source/RivetHello`: the parent class
-//! `UHelloBase` (hand-written) and the generated glue (`Rivet/`).
+//! Ferreal's example: `UGreeter`, a `UCLASS` written in Rust, with every kind of property,
+//! function and hook Ferreal supports, and calls into engine classes through the generated
+//! bindings (`poke`). The C++ it needs is in `../Source/FerrealHello`: the parent class
+//! `UHelloBase` (hand-written) and the generated glue (`Ferreal/`).
 
-use rivet::prelude::*;
+use ferreal::prelude::*;
 
-rivet::module!();
+ferreal::module!();
 
-// Engine classes this crate calls: rivet-build generates their bindings (the `engine`
-// module) from Unreal's reflection data, kept in rivet-engine.json.
-rivet::engine!(AActor, UPrimitiveComponent, UKismetStringLibrary);
+// Engine classes this crate calls: ferreal-build generates their bindings (the `engine`
+// module) from Unreal's reflection data, kept in ferreal-engine.json.
+ferreal::engine!(AActor, UPrimitiveComponent, UKismetStringLibrary);
 
 engine_class!(pub Texture = "UTexture2D" in "Engine/Texture2D.h");
 engine_class!(pub Notifier = "UHelloBase" in "HelloBase.h", bases(Notify));
@@ -172,7 +172,7 @@ impl Greeter {
     }
 }
 
-/// `Rivet::HelloRust::Shout(...)` from C++.
+/// `Ferreal::HelloRust::Shout(...)` from C++.
 #[export]
 pub fn shout(text: &str, notifier: Option<Obj<Notifier>>) -> String {
     let loud = text.to_uppercase();
@@ -182,7 +182,7 @@ pub fn shout(text: &str, notifier: Option<Obj<Notifier>>) -> String {
     loud
 }
 
-/// `Rivet::HelloRust::Poke(...)` from C++: calls engine functions through the generated
+/// `Ferreal::HelloRust::Poke(...)` from C++: calls engine functions through the generated
 /// bindings (in the tests, the mock engine's), and reports what they returned.
 #[export]
 pub fn poke(actor: Obj<engine::Actor>, component: Obj<engine::PrimitiveComponent>) -> String {

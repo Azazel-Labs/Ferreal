@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["rivet", "rivet-model", "rivet-macros", "rivet-build", "examples/hello/rust"]
+members = ["ferreal", "ferreal-model", "ferreal-macros", "ferreal-build", "examples/hello/rust"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,10 +9,10 @@ rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
-rivet = { path = "rivet", version = "0.1.0" }
-rivet-model = { path = "rivet-model", version = "0.1.0" }
-rivet-macros = { path = "rivet-macros", version = "0.1.0" }
-rivet-build = { path = "rivet-build", version = "0.1.0" }
+ferreal = { path = "ferreal", version = "0.1.0" }
+ferreal-model = { path = "ferreal-model", version = "0.1.0" }
+ferreal-macros = { path = "ferreal-macros", version = "0.1.0" }
+ferreal-build = { path = "ferreal-build", version = "0.1.0" }
 syn = { version = "2", features = ["full", "extra-traits", "visit"] }
 quote = "1"
 proc-macro2 = "1"

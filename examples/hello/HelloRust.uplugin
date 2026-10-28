@@ -2,8 +2,8 @@
 	"FileVersion": 3,
 	"Version": 1,
 	"VersionName": "0.1.0",
-	"FriendlyName": "Hello Rust (Rivet example)",
-	"Description": "A UCLASS written in Rust with Rivet.",
+	"FriendlyName": "Hello Rust (Ferreal example)",
+	"Description": "A UCLASS written in Rust with Ferreal.",
 	"Category": "Programming",
 	"CanContainContent": false,
 	"Modules": [

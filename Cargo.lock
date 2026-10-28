@@ -3,6 +3,52 @@
 version = 4
 
 [[package]]
+name = "ferreal"
+version = "0.1.0"
+dependencies = [
+ "ferreal-macros",
+]
+
+[[package]]
+name = "ferreal-build"
+version = "0.1.0"
+dependencies = [
+ "ferreal-model",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "ferreal-hello"
+version = "0.1.0"
+dependencies = [
+ "ferreal",
+ "ferreal-build",
+]
+
+[[package]]
+name = "ferreal-macros"
+version = "0.1.0"
+dependencies = [
+ "ferreal-model",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "ferreal-model"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -30,52 +76,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
-]
-
-[[package]]
-name = "rivet"
-version = "0.1.0"
-dependencies = [
- "rivet-macros",
-]
-
-[[package]]
-name = "rivet-build"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "rivet-model",
- "serde",
- "serde_json",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "rivet-hello"
-version = "0.1.0"
-dependencies = [
- "rivet",
- "rivet-build",
-]
-
-[[package]]
-name = "rivet-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "rivet-model",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "rivet-model"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]

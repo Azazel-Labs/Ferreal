@@ -1,0 +1,19 @@
+[package]
+name = "ferreal-macros"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Ferreal's attribute macros: the Rust half of the glue between Rust and Unreal Engine (use them through the ferreal crate)"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+ferreal-model.workspace = true
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true
+
+[lints]
+workspace = true

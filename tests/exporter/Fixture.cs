@@ -1,5 +1,5 @@
 // A made-up session of Unreal Header Tool: a few classes in the shape of the engine's (their
-// reflected functions as the engine declares them), run through the Rivet exporter. The mock
+// reflected functions as the engine declares them), run through the Ferreal exporter. The mock
 // engine (../mock-ue) registers the same functions, so the test calls them end to end.
 
 using System.Text;
@@ -7,7 +7,7 @@ using EpicGames.Core;
 using EpicGames.UHT.Types;
 using EpicGames.UHT.Utils;
 
-namespace Rivet.Tests;
+namespace Ferreal.Tests;
 
 public static class Fixture
 {
@@ -138,11 +138,11 @@ public static class Fixture
 				Header("Kismet/KismetStringLibrary.h", strings),
 			],
 		});
-		session.Modules.Add(new UhtModule { ShortName = "HelloRust", Headers = [Header("Rivet/Greeter.h", greeter)] });
+		session.Modules.Add(new UhtModule { ShortName = "HelloRust", Headers = [Header("Ferreal/Greeter.h", greeter)] });
 
 		var factory = new Factory(session);
-		RivetExporter.Export(factory);
-		File.WriteAllText(args.Length > 0 ? args[0] : "RivetEngine.json", factory.Output);
+		FerrealExporter.Export(factory);
+		File.WriteAllText(args.Length > 0 ? args[0] : "FerrealEngine.json", factory.Output);
 		return 0;
 	}
 }

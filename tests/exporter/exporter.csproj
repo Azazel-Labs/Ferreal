@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Runs the Rivet exporter (unreal/Rivet/Source/RivetExporter) over a made-up session of
+  <!-- Runs the Ferreal exporter (unreal/Ferreal/Source/FerrealExporter) over a made-up session of
        Unreal Header Tool (Fixture.cs), against a stand-in for UHT's API (UhtStub.cs): it
        checks the exporter compiles, and writes the reflection data the mock engine test
-       reads (../mock-ue/RivetEngine.json). run.sh runs it. -->
+       reads (../mock-ue/FerrealEngine.json). run.sh runs it. -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <OutputType>Exe</OutputType>
@@ -14,6 +14,6 @@
   <ItemGroup>
     <Compile Include="UhtStub.cs" />
     <Compile Include="Fixture.cs" />
-    <Compile Include="../../unreal/Rivet/Source/RivetExporter/RivetExporter.cs" />
+    <Compile Include="../../unreal/Ferreal/Source/FerrealExporter/FerrealExporter.cs" />
   </ItemGroup>
 </Project>

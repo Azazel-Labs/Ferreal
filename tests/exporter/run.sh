@@ -3,4 +3,4 @@
 # data the mock engine test reads. Needs the .NET SDK.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-dotnet run --project "$here/exporter.csproj" -- "$here/../mock-ue/RivetEngine.json"
+dotnet run --project "$here/exporter.csproj" -- "$here/../mock-ue/FerrealEngine.json"
