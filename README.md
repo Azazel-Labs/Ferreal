@@ -93,6 +93,7 @@ What lives where:
 | `ferreal::engine!(AActor, UGameplayStatics);` | | typed bindings of those engine classes (see below) |
 | `#[export]` | a free function | `Ferreal::<Module>::<Name>(...)`, callable from C++ |
 | `ferreal::module!();` | once per crate | the module's entry point |
+| `cpp!([captures] -> Type { C++ })` | an expression | C++ compiled into the module and called (see below) |
 
 Arguments, beyond Unreal's own specifiers (any flag passes through: `EditAnywhere`,
 `BlueprintType`...):
@@ -148,6 +149,37 @@ pub struct MyWidget { /* ... */ }
 
 `self.set_quads(&data)` then calls the C++ method on the object. The generated `.cpp`
 calls it by name, so a signature that doesn't fit is a C++ compile error that points at it.
+
+## C++ inline: `cpp!`
+
+Any C++ the module can compile can be written where it is used, in a `cpp!` block: plain
+engine methods, inline functions, templates, `FMath`, your own C++.
+
+```rust
+fn label(actor: Obj<engine::Actor>, times: i32) -> String {
+    cpp!([actor: Obj<engine::Actor>, times: i32] -> String {
+        // GetActorNameOrLabel is a plain C++ method, not a UFUNCTION.
+        return FString::Printf(TEXT("%s x%d"), *actor->GetActorNameOrLabel(), FMath::Max(times, 2));
+    })
+}
+```
+
+The captures are Rust variables with their types, as Ferreal passes them (see Types); in the
+C++ they are variables of the same names holding the C++ values (`AActor* actor`,
+`int32 times`, an `FString` for a string). The block is the body of a C++ function that
+returns the C++ value of the `-> Type` (nothing without one). `ferreal-build` copies each
+block, comments and all, into the module's `.cpp` as a function of its own, with the headers
+of the classes it captures (`ferreal::cpp_include!("Header.h");` adds others), and Rust calls
+it directly: no reflection, no `ProcessEvent`. A mistake in the C++ is a C++ compile error in
+that function, whose comment gives the block's place in the Rust.
+
+The C++ goes in braces when it is also valid Rust tokens, which almost all C++ is; in a string
+otherwise (`cpp!([n: i32] -> i32 r#"return n * 1'000;"#)`, for digit separators or
+multi-character literals). Blocks are found in the crate's sources by `ferreal-build`, so a
+`cpp!` cannot sit inside another macro's arguments (`println!(..., cpp!(...))`): bind its
+value first. The C++ runs only in the Unreal module (and the mock test), never in a cargo
+build, and C++ is not checked like Rust: a captured object is `nullptr` if it is not of the
+class (`Cast`), and what the C++ does with it is up to the C++.
 
 ## Calling engine classes
 

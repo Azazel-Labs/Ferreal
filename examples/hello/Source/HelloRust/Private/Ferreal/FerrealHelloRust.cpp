@@ -4,6 +4,7 @@
 #include "Ferreal/FerrealHelloRust.h"
 #include "Ferreal/Greeter.h"
 #include "Engine/Texture2D.h"
+#include "GameFramework/Actor.h"
 #include "HelloBase.h"
 #include "FerrealEngine.h"
 
@@ -539,6 +540,12 @@ namespace Ferreal::HelloRust::Detail
 		void (*F493)(void* Object, bool InbNewAbsoluteLocation, bool InbNewAbsoluteRotation, bool InbNewAbsoluteScale);
 		void (*F494)(void* Object, int32 InNewMobility);
 	};
+
+	struct FCppEntry
+	{
+		uint64 Key;
+		const void* Function;
+	};
 }
 
 extern "C"
@@ -564,8 +571,10 @@ extern "C"
 	int32 ferreal_HelloRust_Greeter_m_panics(void* State);
 	void ferreal_HelloRust_base_Notify_register(const Ferreal::HelloRust::Detail::FBaseTable_Notify* Table);
 	void ferreal_HelloRust_engine_register(const Ferreal::HelloRust::Detail::FEngineTable* Table);
+	void ferreal_HelloRust_cpp_register(const Ferreal::HelloRust::Detail::FCppEntry* Entries, size_t Count);
 	Ferreal::FStr8 ferreal_HelloRust_fn_shout(Ferreal::FStr16 InText, void* InNotifier);
 	Ferreal::FStr8 ferreal_HelloRust_fn_poke(void* InActor, void* InComponent);
+	Ferreal::FStr8 ferreal_HelloRust_fn_label(void* InActor, int32 InTimes);
 }
 
 namespace Ferreal::HelloRust::Detail
@@ -10399,6 +10408,51 @@ namespace Ferreal::HelloRust::Detail
 	static const FEngineTable EngineTable = {&Engine0, &Engine1, &Engine2, &Engine3, &Engine4, &Engine5, &Engine6, &Engine7, &Engine8, &Engine9, &Engine10, &Engine11, &Engine12, &Engine13, &Engine14, &Engine15, &Engine16, &Engine17, &Engine18, &Engine19, &Engine20, &Engine21, &Engine22, &Engine23, &Engine24, &Engine25, &Engine26, &Engine27, &Engine28, &Engine29, &Engine30, &Engine31, &Engine32, &Engine33, &Engine34, &Engine35, &Engine36, &Engine37, &Engine38, &Engine39, &Engine40, &Engine41, &Engine42, &Engine43, &Engine44, &Engine45, &Engine46, &Engine47, &Engine48, &Engine49, &Engine50, &Engine51, &Engine52, &Engine53, &Engine54, &Engine55, &Engine56, &Engine57, &Engine58, &Engine59, &Engine60, &Engine61, &Engine62, &Engine63, &Engine64, &Engine65, &Engine66, &Engine67, &Engine68, &Engine69, &Engine70, &Engine71, &Engine72, &Engine73, &Engine74, &Engine75, &Engine76, &Engine77, &Engine78, &Engine79, &Engine80, &Engine81, &Engine82, &Engine83, &Engine84, &Engine85, &Engine86, &Engine87, &Engine88, &Engine89, &Engine90, &Engine91, &Engine92, &Engine93, &Engine94, &Engine95, &Engine96, &Engine97, &Engine98, &Engine99, &Engine100, &Engine101, &Engine102, &Engine103, &Engine104, &Engine105, &Engine106, &Engine107, &Engine108, &Engine109, &Engine110, &Engine111, &Engine112, &Engine113, &Engine114, &Engine115, &Engine116, &Engine117, &Engine118, &Engine119, &Engine120, &Engine121, &Engine122, &Engine123, &Engine124, &Engine125, &Engine126, &Engine127, &Engine128, &Engine129, &Engine130, &Engine131, &Engine132, &Engine133, &Engine134, &Engine135, &Engine136, &Engine137, &Engine138, &Engine139, &Engine140, &Engine141, &Engine142, &Engine143, &Engine144, &Engine145, &Engine146, &Engine147, &Engine148, &Engine149, &Engine150, &Engine151, &Engine152, &Engine153, &Engine154, &Engine155, &Engine156, &Engine157, &Engine158, &Engine159, &Engine160, &Engine161, &Engine162, &Engine163, &Engine164, &Engine165, &Engine166, &Engine167, &Engine168, &Engine169, &Engine170, &Engine171, &Engine172, &Engine173, &Engine174, &Engine175, &Engine176, &Engine177, &Engine178, &Engine179, &Engine180, &Engine181, &Engine182, &Engine183, &Engine184, &Engine185, &Engine186, &Engine187, &Engine188, &Engine189, &Engine190, &Engine191, &Engine192, &Engine193, &Engine194, &Engine195, &Engine196, &Engine197, &Engine198, &Engine199, &Engine200, &Engine201, &Engine202, &Engine203, &Engine204, &Engine205, &Engine206, &Engine207, &Engine208, &Engine209, &Engine210, &Engine211, &Engine212, &Engine213, &Engine214, &Engine215, &Engine216, &Engine217, &Engine218, &Engine219, &Engine220, &Engine221, &Engine222, &Engine223, &Engine224, &Engine225, &Engine226, &Engine227, &Engine228, &Engine229, &Engine230, &Engine231, &Engine232, &Engine233, &Engine234, &Engine235, &Engine236, &Engine237, &Engine238, &Engine239, &Engine240, &Engine241, &Engine242, &Engine243, &Engine244, &Engine245, &Engine246, &Engine247, &Engine248, &Engine249, &Engine250, &Engine251, &Engine252, &Engine253, &Engine254, &Engine255, &Engine256, &Engine257, &Engine258, &Engine259, &Engine260, &Engine261, &Engine262, &Engine263, &Engine264, &Engine265, &Engine266, &Engine267, &Engine268, &Engine269, &Engine270, &Engine271, &Engine272, &Engine273, &Engine274, &Engine275, &Engine276, &Engine277, &Engine278, &Engine279, &Engine280, &Engine281, &Engine282, &Engine283, &Engine284, &Engine285, &Engine286, &Engine287, &Engine288, &Engine289, &Engine290, &Engine291, &Engine292, &Engine293, &Engine294, &Engine295, &Engine296, &Engine297, &Engine298, &Engine299, &Engine300, &Engine301, &Engine302, &Engine303, &Engine304, &Engine305, &Engine306, &Engine307, &Engine308, &Engine309, &Engine310, &Engine311, &Engine312, &Engine313, &Engine314, &Engine315, &Engine316, &Engine317, &Engine318, &Engine319, &Engine320, &Engine321, &Engine322, &Engine323, &Engine324, &Engine325, &Engine326, &Engine327, &Engine328, &Engine329, &Engine330, &Engine331, &Engine332, &Engine333, &Engine334, &Engine335, &Engine336, &Engine337, &Engine338, &Engine339, &Engine340, &Engine341, &Engine342, &Engine343, &Engine344, &Engine345, &Engine346, &Engine347, &Engine348, &Engine349, &Engine350, &Engine351, &Engine352, &Engine353, &Engine354, &Engine355, &Engine356, &Engine357, &Engine358, &Engine359, &Engine360, &Engine361, &Engine362, &Engine363, &Engine364, &Engine365, &Engine366, &Engine367, &Engine368, &Engine369, &Engine370, &Engine371, &Engine372, &Engine373, &Engine374, &Engine375, &Engine376, &Engine377, &Engine378, &Engine379, &Engine380, &Engine381, &Engine382, &Engine383, &Engine384, &Engine385, &Engine386, &Engine387, &Engine388, &Engine389, &Engine390, &Engine391, &Engine392, &Engine393, &Engine394, &Engine395, &Engine396, &Engine397, &Engine398, &Engine399, &Engine400, &Engine401, &Engine402, &Engine403, &Engine404, &Engine405, &Engine406, &Engine407, &Engine408, &Engine409, &Engine410, &Engine411, &Engine412, &Engine413, &Engine414, &Engine415, &Engine416, &Engine417, &Engine418, &Engine419, &Engine420, &Engine421, &Engine422, &Engine423, &Engine424, &Engine425, &Engine426, &Engine427, &Engine428, &Engine429, &Engine430, &Engine431, &Engine432, &Engine433, &Engine434, &Engine435, &Engine436, &Engine437, &Engine438, &Engine439, &Engine440, &Engine441, &Engine442, &Engine443, &Engine444, &Engine445, &Engine446, &Engine447, &Engine448, &Engine449, &Engine450, &Engine451, &Engine452, &Engine453, &Engine454, &Engine455, &Engine456, &Engine457, &Engine458, &Engine459, &Engine460, &Engine461, &Engine462, &Engine463, &Engine464, &Engine465, &Engine466, &Engine467, &Engine468, &Engine469, &Engine470, &Engine471, &Engine472, &Engine473, &Engine474, &Engine475, &Engine476, &Engine477, &Engine478, &Engine479, &Engine480, &Engine481, &Engine482, &Engine483, &Engine484, &Engine485, &Engine486, &Engine487, &Engine488, &Engine489, &Engine490, &Engine491, &Engine492, &Engine493, &Engine494};
 }
 
+namespace FerrealCppHelloRust
+{
+	// cpp! at src/lib.rs:225
+	static Ferreal::FStr16 Cpp_7f1cf87a1220c7f7(void* FerrealIn_actor)
+	{
+		auto actor = Ferreal::FromObj<AActor>(FerrealIn_actor);
+		(void)actor;
+		auto Body = [&]() -> FString
+		{
+			return actor->GetActorNameOrLabel();
+		};
+		return Ferreal::KeepString(Body());
+	}
+
+	// cpp! at src/lib.rs:229
+	static Ferreal::FStr16 Cpp_d011365228c49d2d(Ferreal::FStr8 FerrealIn_name, int32 FerrealIn_most)
+	{
+		auto name = Ferreal::ToFString(FerrealIn_name);
+		(void)name;
+		auto most = FerrealIn_most;
+		(void)most;
+		auto Body = [&]() -> FString
+		{
+			return FString::Printf(TEXT("%s x%d"), *name, most);
+		};
+		return Ferreal::KeepString(Body());
+	}
+
+	// cpp! at src/lib.rs:228
+	static int32 Cpp_d33d81f66251f260(int32 FerrealIn_times)
+	{
+		auto times = FerrealIn_times;
+		(void)times;
+		auto Body = [&]() -> int32
+		{ return FMath::Max(times, 2); };
+		return Body();
+	}
+
+	static const Ferreal::HelloRust::Detail::FCppEntry Entries[] = {
+		{0x7f1cf87a1220c7f7ull, reinterpret_cast<const void*>(&Cpp_7f1cf87a1220c7f7)},
+		{0xd011365228c49d2dull, reinterpret_cast<const void*>(&Cpp_d011365228c49d2d)},
+		{0xd33d81f66251f260ull, reinterpret_cast<const void*>(&Cpp_d33d81f66251f260)}
+	};
+}
+
 void Ferreal::HelloRust::Register()
 {
 	static const bool bRegistered = []
@@ -10408,6 +10462,7 @@ void Ferreal::HelloRust::Register()
 		ferreal_HelloRust_Greeter_register(&Detail::Table_Greeter);
 		ferreal_HelloRust_base_Notify_register(&Detail::BaseTable_Notify);
 		ferreal_HelloRust_engine_register(&Detail::EngineTable);
+		ferreal_HelloRust_cpp_register(FerrealCppHelloRust::Entries, sizeof(FerrealCppHelloRust::Entries) / sizeof(FerrealCppHelloRust::Entries[0]));
 		return true;
 	}();
 	(void)bRegistered;
@@ -10423,6 +10478,12 @@ FString Ferreal::HelloRust::Poke(AActor* InActor, UPrimitiveComponent* InCompone
 {
 	Register();
 	return Ferreal::ToFString(ferreal_HelloRust_fn_poke(Ferreal::ToObj(InActor), Ferreal::ToObj(InComponent)));
+}
+
+FString Ferreal::HelloRust::Label(AActor* InActor, int32 InTimes)
+{
+	Register();
+	return Ferreal::ToFString(ferreal_HelloRust_fn_label(Ferreal::ToObj(InActor), InTimes));
 }
 
 // UGreeter

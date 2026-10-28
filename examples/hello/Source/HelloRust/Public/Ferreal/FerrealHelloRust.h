@@ -23,4 +23,10 @@ namespace Ferreal::HelloRust
 	 * bindings (in the tests, the mock engine's), and reports what they returned.
 	 */
 	HELLORUST_API FString Poke(AActor* InActor, UPrimitiveComponent* InComponent);
+
+	/**
+	 * `Ferreal::HelloRust::Label(...)` from C++: C++ written inline with `cpp!`, for what the
+	 * engine bindings cannot reach (they call reflected functions only).
+	 */
+	HELLORUST_API FString Label(AActor* InActor, int32 InTimes);
 }

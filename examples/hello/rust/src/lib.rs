@@ -216,3 +216,17 @@ pub fn poke(actor: Obj<engine::Actor>, component: Obj<engine::PrimitiveComponent
         ),
     )
 }
+
+/// `Ferreal::HelloRust::Label(...)` from C++: C++ written inline with `cpp!`, for what the
+/// engine bindings cannot reach (they call reflected functions only).
+#[export]
+pub fn label(actor: Obj<engine::Actor>, times: i32) -> String {
+    // A plain C++ method of AActor, not a UFUNCTION.
+    let name = cpp!([actor: Obj<engine::Actor>] -> String {
+        return actor->GetActorNameOrLabel();
+    });
+    let most = cpp!([times: i32] -> i32 { return FMath::Max(times, 2); });
+    cpp!([name: &str, most: i32] -> String {
+        return FString::Printf(TEXT("%s x%d"), *name, most);
+    })
+}

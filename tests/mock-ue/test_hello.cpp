@@ -214,6 +214,9 @@ int main()
 	EXPECT(State.bHidden && State.Owner == Actor && State.Rotation.Yaw == 20.0 && State.Rotation.Roll == 30.0);
 	EXPECT(!State.bVisible && State.bPropagate && State.Collision == 3);
 	EXPECT(Logged("/Script/Engine.Actor.GetGameTimeSinceCreation cannot be called from Rust"));
+	// C++ written inline in the Rust (cpp!): a plain method, FMath, a string passed both ways.
+	EXPECT(ToUtf8(Ferreal::HelloRust::Label(Actor, 1)) == "Rusty actor x2");
+	EXPECT(ToUtf8(Ferreal::HelloRust::Label(Actor, 5)) == "Rusty actor x5");
 	// An object of the wrong class is refused, not called.
 	EXPECT(ToUtf8(Ferreal::HelloRust::Poke(reinterpret_cast<AActor*>(Component), Component)).find("own=false") != std::string::npos
 		|| Logged("which is not a valid Actor"));

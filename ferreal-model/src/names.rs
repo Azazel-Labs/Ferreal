@@ -72,6 +72,11 @@ impl Symbols {
         format!("{}engine_register", self.prefix)
     }
 
+    /// Rust: receives the table of the crate's `cpp!` blocks.
+    pub fn register_cpp(&self) -> String {
+        format!("{}cpp_register", self.prefix)
+    }
+
     /// Rust: a free function exported to C++.
     pub fn export(&self, function: &str) -> String {
         format!("{}fn_{}", self.prefix, unraw(function))

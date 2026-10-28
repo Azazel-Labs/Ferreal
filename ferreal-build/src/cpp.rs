@@ -84,6 +84,34 @@ fn cpp_string(s: &str) -> String {
     out
 }
 
+/// A `cpp!` block's text, its lines indented with `inner` (their common indentation
+/// removed) and its closing line with `close`. A single line is kept as written.
+fn reindent(text: &str, inner: &str, close: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() < 2 {
+        return text.to_string();
+    }
+    let common = lines[1..]
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    let mut out = lines[0].trim_end().to_string();
+    for l in &lines[1..] {
+        out.push('\n');
+        if !l.trim().is_empty() {
+            out.push_str(inner);
+            out.push_str(l.get(common..).unwrap_or(l.trim_start()).trim_end());
+        }
+    }
+    // The last line holds the indentation before the closing brace.
+    if lines.last().is_some_and(|l| l.trim().is_empty()) {
+        out.push_str(close);
+    }
+    out
+}
+
 /// A float literal: `24` → `24.0f`.
 fn float(n: &str, f32_suffix: bool) -> String {
     let mut s = n.to_string();
@@ -634,6 +662,18 @@ impl<'a> Gen<'a> {
         for b in &self.model.bases {
             includes.extend(b.item.includes.iter().cloned());
         }
+        // `cpp!` blocks: the headers of the classes they pass, and those asked for.
+        for b in &self.model.cpp_blocks {
+            let types = b.block.captures.iter().map(|c| &c.param.ty);
+            for t in types.chain([&b.block.ret]) {
+                if let Some(c) = t.class()
+                    && let Some(i) = &self.class(c).include
+                {
+                    includes.insert(i.clone());
+                }
+            }
+        }
+        includes.extend(self.model.cpp_includes.iter().map(|i| i.item.clone()));
         for i in &includes {
             let _ = writeln!(o, "#include \"{i}\"");
         }
@@ -690,6 +730,11 @@ impl<'a> Gen<'a> {
         }
         if !self.engine.is_empty() {
             o.push_str(&self.engine.cpp_table_type());
+        }
+        if !self.model.cpp_blocks.is_empty() {
+            o.push_str(
+                "\n\tstruct FCppEntry\n\t{\n\t\tuint64 Key;\n\t\tconst void* Function;\n\t};\n",
+            );
         }
         o.push_str("}\n\n");
 
@@ -755,6 +800,13 @@ impl<'a> Gen<'a> {
                 o,
                 "\tvoid {}(const Ferreal::{m}::Detail::FEngineTable* Table);",
                 s.register_engine()
+            );
+        }
+        if !self.model.cpp_blocks.is_empty() {
+            let _ = writeln!(
+                o,
+                "\tvoid {}(const Ferreal::{m}::Detail::FCppEntry* Entries, size_t Count);",
+                s.register_cpp()
             );
         }
         for e in &self.model.exports {
@@ -841,6 +893,11 @@ impl<'a> Gen<'a> {
         }
         o.push_str("}\n\n");
 
+        // `cpp!` blocks, in a namespace of their own (their C++ sees the global names).
+        if !self.model.cpp_blocks.is_empty() {
+            self.cpp_blocks(&mut o);
+        }
+
         // Registration.
         let _ = writeln!(
             o,
@@ -869,6 +926,13 @@ impl<'a> Gen<'a> {
         }
         if !self.engine.is_empty() {
             let _ = writeln!(o, "\t\t{}(&Detail::EngineTable);", s.register_engine());
+        }
+        if !self.model.cpp_blocks.is_empty() {
+            let _ = writeln!(
+                o,
+                "\t\t{}(FerrealCpp{m}::Entries, sizeof(FerrealCpp{m}::Entries) / sizeof(FerrealCpp{m}::Entries[0]));",
+                s.register_cpp()
+            );
         }
         o.push_str("\t\treturn true;\n\t}();\n\t(void)bRegistered;\n}\n");
 
@@ -927,6 +991,74 @@ impl<'a> Gen<'a> {
             "\n\tstatic const FBaseTable_{0} BaseTable_{0} = {{{1}}};",
             b.name,
             entries.join(", ")
+        );
+    }
+
+    /// A C++ function per `cpp!` block (identical blocks share one), and the table of them,
+    /// sorted by key, that Rust looks them up in.
+    fn cpp_blocks(&self, o: &mut String) {
+        let m = self.module;
+        let mut blocks = std::collections::BTreeMap::new();
+        for b in &self.model.cpp_blocks {
+            blocks.entry(b.key).or_insert(b);
+        }
+        let _ = writeln!(o, "namespace FerrealCpp{m}\n{{");
+        for (key, b) in &blocks {
+            let name = ferreal_model::cpp::key_name(*key);
+            let block = &b.block;
+            let params: Vec<String> = block
+                .captures
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{} FerrealIn_{}",
+                        c.param.ty.cpp_ffi(false),
+                        c.param.cpp_name
+                    )
+                })
+                .collect();
+            let _ = writeln!(
+                o,
+                "\t// cpp! at {}\n\tstatic {} Cpp_{name}({})\n\t{{",
+                b.location(&self.model.dir),
+                block.ret.cpp_ffi(true),
+                params.join(", ")
+            );
+            for c in &block.captures {
+                let n = &c.param.cpp_name;
+                let _ = writeln!(
+                    o,
+                    "\t\tauto {n} = {};\n\t\t(void){n};",
+                    self.rust_to_cpp(&c.param.ty, &format!("FerrealIn_{n}"), false)
+                );
+            }
+            let _ = writeln!(
+                o,
+                "\t\tauto Body = [&]() -> {}\n\t\t{{{}}};",
+                self.value_type(&block.ret),
+                reindent(&b.text, "\t\t\t", "\t\t")
+            );
+            if block.ret == Ty::Unit {
+                o.push_str("\t\tBody();\n\t}\n\n");
+            } else {
+                let _ = writeln!(
+                    o,
+                    "\t\treturn {};\n\t}}\n",
+                    self.keep_for_rust(&block.ret, "Body()")
+                );
+            }
+        }
+        let entries: Vec<String> = blocks
+            .keys()
+            .map(|k| {
+                let name = ferreal_model::cpp::key_name(*k);
+                format!("{{0x{name}ull, reinterpret_cast<const void*>(&Cpp_{name})}}")
+            })
+            .collect();
+        let _ = writeln!(
+            o,
+            "\tstatic const Ferreal::{m}::Detail::FCppEntry Entries[] = {{\n\t\t{}\n\t}};\n}}\n",
+            entries.join(",\n\t\t")
         );
     }
 
@@ -1163,6 +1295,12 @@ pub fn check(model: &Collected, engine: &Bindings) -> Vec<String> {
     for e in &model.exports {
         for t in e.item.params.iter().map(|p| &p.ty).chain([&e.item.ret]) {
             check_ty(t, &e.at, &mut errors);
+        }
+    }
+    for b in &model.cpp_blocks {
+        let captures = b.block.captures.iter().map(|c| &c.param.ty);
+        for t in captures.chain([&b.block.ret]) {
+            check_ty(t, &b.at, &mut errors);
         }
     }
     for e in &model.engine {

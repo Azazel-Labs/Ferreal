@@ -6,11 +6,13 @@
 //! agree.
 
 pub mod attr;
+pub mod cpp;
 pub mod items;
 pub mod names;
 pub mod ty;
 
 pub use attr::{Arg, ArgValue, DefaultValue, parse_args};
+pub use cpp::{Capture, CppBlock, CppBody};
 pub use items::{
     Base, BaseMethod, CallSuper, Class, ClassImpl, EngineClass, EngineList, Enum, Export, Method,
     MethodKind, Param, Property, Receiver, Variant, base_marker, path_name,

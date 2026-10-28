@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 /// A `UObject*` (or null).
 #[repr(transparent)]
@@ -203,6 +203,86 @@ impl<T> Table<T> {
         );
         // SAFETY: C++ registered a static table, alive for the program.
         unsafe { &*p }
+    }
+}
+
+/// A `cpp!` block's C++ function, by its key (the generated registration hands them over,
+/// sorted by key).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct CppEntry {
+    pub key: u64,
+    pub function: *const c_void,
+}
+
+/// The crate's `cpp!` blocks (`ferreal::module!` declares it).
+pub struct CppBlocks {
+    ptr: AtomicPtr<CppEntry>,
+    len: AtomicUsize,
+}
+
+impl Default for CppBlocks {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CppBlocks {
+    pub const fn new() -> Self {
+        CppBlocks {
+            ptr: AtomicPtr::new(std::ptr::null_mut()),
+            len: AtomicUsize::new(0),
+        }
+    }
+
+    /// Keeps `len` entries at `entries`, which C++ owns for the rest of the program.
+    pub fn set(&self, entries: *const CppEntry, len: usize) {
+        self.len.store(len, Ordering::Relaxed);
+        self.ptr.store(entries.cast_mut(), Ordering::Release);
+    }
+
+    fn find(&self, key: u64, at: &str) -> *const c_void {
+        let p = self.ptr.load(Ordering::Acquire);
+        let entries: &[CppEntry] = if p.is_null() {
+            &[]
+        } else {
+            // SAFETY: C++ registered a static array of `len` entries.
+            unsafe { std::slice::from_raw_parts(p, self.len.load(Ordering::Relaxed)) }
+        };
+        match entries.binary_search_by_key(&key, |e| e.key) {
+            Ok(i) => entries[i].function,
+            Err(_) => panic!(
+                "ferreal: the cpp! block at {at} has no C++ function: ferreal-build finds cpp! blocks in the crate's sources, not inside other macros' arguments (or the module's C++ is out of date)"
+            ),
+        }
+    }
+}
+
+/// A `cpp!` call site: its block's C++ function, looked up once.
+pub struct CppSlot {
+    key: u64,
+    at: &'static str,
+    function: AtomicPtr<c_void>,
+}
+
+impl CppSlot {
+    pub const fn new(key: u64, at: &'static str) -> Self {
+        CppSlot {
+            key,
+            at,
+            function: AtomicPtr::new(std::ptr::null_mut()),
+        }
+    }
+
+    /// The block's C++ function (to transmute to its signature).
+    pub fn get(&self, blocks: &CppBlocks) -> *const c_void {
+        let f = self.function.load(Ordering::Relaxed);
+        if !f.is_null() {
+            return f;
+        }
+        let f = blocks.find(self.key, self.at);
+        self.function.store(f.cast_mut(), Ordering::Relaxed);
+        f
     }
 }
 

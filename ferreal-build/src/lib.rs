@@ -1,6 +1,6 @@
 //! The build-script half of Ferreal: reads a crate's Unreal-facing items (`#[uclass]`,
-//! `#[uclass_impl]`, `#[uenum]`, `#[cpp_base]`, `engine_class!`, `#[export]`) from its
-//! sources and writes their C++ into an Unreal module.
+//! `#[uclass_impl]`, `#[uenum]`, `#[cpp_base]`, `engine_class!`, `#[export]`, and the C++ of
+//! its `cpp!` blocks) from its sources and writes their C++ into an Unreal module.
 //!
 //! ```no_run
 //! // build.rs
@@ -34,8 +34,11 @@ pub mod engine;
 use std::path::{Path, PathBuf};
 
 use ferreal_model::attr::args_of;
-use ferreal_model::{Base, Class, ClassImpl, EngineClass, EngineList, Enum, Export};
+use ferreal_model::{
+    Base, Class, ClassImpl, CppBlock, CppBody, EngineClass, EngineList, Enum, Export,
+};
 use syn::Item;
+use syn::visit::Visit;
 
 /// An item and where it is (`file:line`).
 #[derive(Clone, Debug)]
@@ -71,8 +74,40 @@ pub struct Collected {
     /// `ferreal::engine!` lists.
     pub engine_lists: Vec<At<EngineList>>,
     pub exports: Vec<At<Export>>,
+    /// `cpp!` blocks, in the order found.
+    pub cpp_blocks: Vec<CppAt>,
+    /// `ferreal::cpp_include!` headers.
+    pub cpp_includes: Vec<At<String>>,
+    /// The crate's directory, which the generated C++ gives locations relative to.
+    pub dir: PathBuf,
     /// The source files read.
     pub files: Vec<PathBuf>,
+}
+
+/// A `cpp!` block found in the sources.
+#[derive(Clone, Debug)]
+pub struct CppAt {
+    pub block: CppBlock,
+    /// Its key (`ferreal_model::cpp::key`), which the macro computes too.
+    pub key: u64,
+    pub at: String,
+    pub file: PathBuf,
+    pub line: usize,
+    /// The C++, as written.
+    pub text: String,
+}
+
+impl CppAt {
+    /// `file:line`, the file relative to `dir` (the crate's) when it is under it, with `/`
+    /// separators: what the generated C++ notes, the same on every machine.
+    pub fn location(&self, dir: &Path) -> String {
+        let file = self.file.strip_prefix(dir).unwrap_or(&self.file);
+        let file: Vec<String> = file
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        format!("{}:{}", file.join("/"), self.line)
+    }
 }
 
 /// What went wrong, with `file:line:column` locations.
@@ -135,6 +170,13 @@ pub fn collect(root: &Path) -> Result<Collected, Error> {
             }
         };
         out.files.push(file.clone());
+        CppFinder {
+            file: &file,
+            text: &text,
+            out: &mut out,
+            errors: &mut errors,
+        }
+        .visit_file(&parsed);
         // Where its submodules' files are: next to it for lib.rs and mod.rs, else in a folder
         // of its name.
         let dir = if owns_dir {
@@ -353,6 +395,84 @@ fn walk(
     }
 }
 
+/// Finds the `cpp!` and `cpp_include!` invocations of a file, wherever they are (function
+/// bodies included; not inside other macros' arguments, which are not parsed).
+struct CppFinder<'a> {
+    file: &'a Path,
+    text: &'a str,
+    out: &'a mut Collected,
+    errors: &'a mut Vec<String>,
+}
+
+impl CppFinder<'_> {
+    fn block(&mut self, m: &syn::Macro) -> syn::Result<()> {
+        let block: CppBlock = syn::parse2(m.tokens.clone())?;
+        let text = match &block.body {
+            CppBody::Text(s) => s.value(),
+            CppBody::Tokens(g) => {
+                let (start, end) = (g.span_open().end(), g.span_close().start());
+                match (self.offset(start), self.offset(end)) {
+                    (Some(a), Some(b)) if a <= b => self.text[a..b].to_string(),
+                    _ => {
+                        return Err(syn::Error::new(
+                            g.span(),
+                            "cannot locate this cpp! block in its file",
+                        ));
+                    }
+                }
+            }
+        };
+        let span = m.path.segments.last().expect("a name").ident.span();
+        self.out.cpp_blocks.push(CppAt {
+            key: ferreal_model::cpp::key(&m.tokens),
+            at: at(self.file, span),
+            file: self.file.to_path_buf(),
+            line: span.start().line,
+            text,
+            block,
+        });
+        Ok(())
+    }
+
+    /// The byte offset of a line (1-based) and column (in characters).
+    fn offset(&self, at: proc_macro2::LineColumn) -> Option<usize> {
+        let line_start = if at.line == 1 {
+            0
+        } else {
+            self.text
+                .match_indices('\n')
+                .nth(at.line - 2)
+                .map(|(i, _)| i + 1)?
+        };
+        let line = &self.text[line_start..];
+        let column = line
+            .char_indices()
+            .nth(at.column)
+            .map_or(line.len(), |(i, _)| i);
+        Some(line_start + column)
+    }
+}
+
+impl<'ast> Visit<'ast> for CppFinder<'_> {
+    fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        let name = m.path.segments.last().map(|s| s.ident.to_string());
+        let r = match name.as_deref() {
+            Some("cpp") => self.block(m),
+            Some("cpp_include") => syn::parse2::<syn::LitStr>(m.tokens.clone()).map(|s| {
+                self.out.cpp_includes.push(At {
+                    item: s.value(),
+                    at: at(self.file, s.span()),
+                });
+            }),
+            _ => Ok(()),
+        };
+        if let Err(e) = r {
+            self.errors.push(located(self.file, &e));
+        }
+        syn::visit::visit_macro(self, m);
+    }
+}
+
 /// A generated file.
 pub struct GeneratedFile {
     /// Relative to the module directory.
@@ -454,7 +574,8 @@ impl Module {
         let crate_dir =
             std::env::var_os("CARGO_MANIFEST_DIR").map_or_else(PathBuf::new, PathBuf::from);
         let root = crate_dir.join(&self.root);
-        let model = collect(&root)?;
+        let mut model = collect(&root)?;
+        model.dir = crate_dir.clone();
         for f in &model.files {
             println!("cargo:rerun-if-changed={}", f.display());
         }

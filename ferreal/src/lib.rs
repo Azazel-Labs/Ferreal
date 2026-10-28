@@ -39,6 +39,10 @@
 //! data Unreal Header Tool exports (the Ferreal plugin's exporter). Each call fills a C++
 //! struct of its parameters and goes through `ProcessEvent`; the struct is checked against
 //! the engine's reflection the first time.
+//!
+//! Anything else in C++ is written inline: `cpp!([actor: Obj<engine::Actor>] -> String {
+//! return actor->GetActorNameOrLabel(); })` is compiled into the module (by `ferreal-build`)
+//! and called directly.
 
 pub mod ffi;
 pub mod log;
@@ -46,14 +50,14 @@ mod obj;
 mod types;
 
 pub use ferreal_macros::{
-    cpp_base, engine, engine_class, export, module, uclass, uclass_impl, uenum,
+    cpp, cpp_base, cpp_include, engine, engine_class, export, module, uclass, uclass_impl, uenum,
 };
 pub use obj::{AsObject, Class, Derives, IsA, Obj, obj_from_ffi, objs_from_ffi};
 pub use types::{LinearColor, Rotator, UEnum, Vector2, Vector3};
 
 pub mod prelude {
     pub use crate::{
-        AsObject, IsA, LinearColor, Obj, Rotator, UEnum, Vector2, Vector3, cpp_base, engine,
+        AsObject, IsA, LinearColor, Obj, Rotator, UEnum, Vector2, Vector3, cpp, cpp_base, engine,
         engine_class, export, uclass, uclass_impl, uenum,
     };
 }
