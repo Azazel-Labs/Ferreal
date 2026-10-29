@@ -110,6 +110,78 @@ impl<C> Obj<C> {
     }
 }
 
+/// A class: `C`, or one deriving from it (a `TSubclassOf<C>`; a `UClass*` is a `ClassOf<Object>`).
+/// Engine functions taking one accept the class of any `D` that `IsA<C>`.
+pub struct ClassOf<C> {
+    raw: RawObj,
+    class: PhantomData<fn() -> C>,
+}
+
+impl<C: Class> ClassOf<C> {
+    /// `C`'s own class, found by its name; `None` if it is not loaded (its module is not).
+    pub fn get() -> Option<ClassOf<C>> {
+        let name = C::CPP.get(1..).unwrap_or(C::CPP);
+        ClassOf::from_raw((crate::log::MODULE.get().find_class)(
+            crate::ffi::Str8::new(name),
+        ))
+    }
+}
+
+impl<C> ClassOf<C> {
+    /// The class `raw` (a `UClass*`), `None` for null. Unchecked: the caller knows it is `C`
+    /// or derives from it.
+    pub fn from_raw(raw: RawObj) -> Option<ClassOf<C>> {
+        (!raw.is_null()).then_some(ClassOf {
+            raw,
+            class: PhantomData,
+        })
+    }
+
+    /// The `UClass*`.
+    pub fn raw(self) -> RawObj {
+        self.raw
+    }
+
+    /// The same class as one of an ancestor's classes (checked by the types).
+    pub fn upcast<D>(self) -> ClassOf<D>
+    where
+        C: IsA<D>,
+    {
+        ClassOf {
+            raw: self.raw,
+            class: PhantomData,
+        }
+    }
+}
+
+impl<C> Clone for ClassOf<C> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<C> Copy for ClassOf<C> {}
+
+impl<C> PartialEq for ClassOf<C> {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw == other.raw
+    }
+}
+
+impl<C> Eq for ClassOf<C> {}
+
+impl<C> std::hash::Hash for ClassOf<C> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.raw.hash(state);
+    }
+}
+
+impl<C> fmt::Debug for ClassOf<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ClassOf({:p})", self.raw.0)
+    }
+}
+
 /// Converts an object handle received from C++ (generated glue).
 pub fn obj_from_ffi<C>(raw: RawObj, what: &str) -> Obj<C> {
     Obj::from_raw(raw)

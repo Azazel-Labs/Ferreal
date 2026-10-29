@@ -4,6 +4,8 @@
 #include "Ferreal/FerrealHelloRust.h"
 #include "Components/PrimitiveComponent.h"
 #include "Engine/HitResult.h"
+#include "Misc/DateTime.h"
+#include "Misc/Timespan.h"
 #include "Engine/Texture2D.h"
 #include "GameFramework/Actor.h"
 
@@ -84,6 +86,14 @@ struct FMockEngine
 	UScriptStruct HitResult{"HitResult"};
 	UScriptStruct Transform{"Transform"};
 	UScriptStruct LinearColor{"LinearColor"};
+	UScriptStruct IntPoint{"IntPoint"};
+	UScriptStruct IntVector{"IntVector"};
+	UScriptStruct Vector4{"Vector4"};
+	UScriptStruct Color{"Color"};
+	UScriptStruct Box{"Box"};
+	UScriptStruct Matrix{"Matrix"};
+	UScriptStruct DateTime{"DateTime"};
+	UScriptStruct Timespan{"Timespan"};
 	UClass Object{"Object", nullptr};
 	UClass Actor{"Actor", &Object};
 	UClass ActorComponent{"ActorComponent", &Object};
@@ -228,6 +238,60 @@ struct FMockEngine
 				Hit.HitObjectHandle = FActorInstanceHandle(Cast<AActor>(Target));
 				F.Param<bool>(P, 12) = true;
 			});
+		// Core types (NoExport), as the engine's functions treat them.
+		AddFunction(Math, "Add_IntPointIntPoint", {StructParam<FIntPoint>("A", &IntPoint), StructParam<FIntPoint>("B", &IntPoint), StructParam<FIntPoint>("ReturnValue", &IntPoint, true)},
+			[](UFunction& F, UObject*, uint8* P)
+			{
+				const FIntPoint& A = F.Param<FIntPoint>(P, 0);
+				const FIntPoint& B = F.Param<FIntPoint>(P, 1);
+				F.Param<FIntPoint>(P, 2) = FIntPoint(A.X + B.X, A.Y + B.Y);
+			});
+		AddFunction(Math, "Conv_IntToIntVector", {Param("InInt", "IntProperty", 4, 4), StructParam<FIntVector>("ReturnValue", &IntVector, true)},
+			[](UFunction& F, UObject*, uint8* P) { const int32 I = F.Param<int32>(P, 0); F.Param<FIntVector>(P, 1) = FIntVector(I, I, I); });
+		AddFunction(Math, "Conv_Vector4ToVector", {StructParam<FVector4>("InVector4", &Vector4), StructParam<FVector>("ReturnValue", &Vector, true)},
+			[](UFunction& F, UObject*, uint8* P) { const FVector4& V = F.Param<FVector4>(P, 0); F.Param<FVector>(P, 1) = FVector(V.X, V.Y, V.Z); });
+		AddFunction(Math, "Conv_LinearColorToColor", {StructParam<FLinearColor>("InLinearColor", &LinearColor), Param("InUseSRGB", "BoolProperty", 1, 1), StructParam<FColor>("ReturnValue", &Color, true)},
+			[](UFunction& F, UObject*, uint8* P)
+			{
+				const FLinearColor& C = F.Param<FLinearColor>(P, 0);
+				auto Byte = [](float V) { return static_cast<uint8>(V * 255.0f + 0.5f); };
+				F.Param<FColor>(P, 2) = FColor(Byte(C.R), Byte(C.G), Byte(C.B), Byte(C.A));
+			});
+		AddFunction(Math, "MakeBox", {StructParam<FVector>("Min", &Vector), StructParam<FVector>("Max", &Vector), StructParam<FBox>("ReturnValue", &Box, true)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<FBox>(P, 2) = FBox(F.Param<FVector>(P, 0), F.Param<FVector>(P, 1)); });
+		AddFunction(Math, "Matrix_GetOrigin", {StructParam<FMatrix>("InMatrix", &Matrix), StructParam<FVector>("ReturnValue", &Vector, true)},
+			[](UFunction& F, UObject*, uint8* P) { const FMatrix& M = F.Param<FMatrix>(P, 0); F.Param<FVector>(P, 1) = FVector(M.M[3][0], M.M[3][1], M.M[3][2]); });
+		// Days from 0001-01-01 of the first of a month, enough for the test's dates.
+		AddFunction(Math, "MakeDateTime",
+			{Param("Year", "IntProperty", 4, 4), Param("Month", "IntProperty", 4, 4), Param("Day", "IntProperty", 4, 4), Param("Hour", "IntProperty", 4, 4),
+				Param("Minute", "IntProperty", 4, 4), Param("Second", "IntProperty", 4, 4), Param("Millisecond", "IntProperty", 4, 4), StructParam<FDateTime>("ReturnValue", &DateTime, true)},
+			[](UFunction& F, UObject*, uint8* P)
+			{
+				const int64 Days = (F.Param<int32>(P, 0) - 1) * int64(365) + F.Param<int32>(P, 2) - 1;
+				const int64 Seconds = ((Days * 24 + F.Param<int32>(P, 3)) * 60 + F.Param<int32>(P, 4)) * 60 + F.Param<int32>(P, 5);
+				F.Param<FDateTime>(P, 7) = FDateTime(Seconds * 10000000);
+			});
+		AddFunction(Math, "Add_DateTimeTimespan", {StructParam<FDateTime>("A", &DateTime), StructParam<FTimespan>("B", &Timespan), StructParam<FDateTime>("ReturnValue", &DateTime, true)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<FDateTime>(P, 2) = FDateTime(F.Param<FDateTime>(P, 0).GetTicks() + F.Param<FTimespan>(P, 1).GetTicks()); });
+		AddFunction(Math, "GetYear", {StructParam<FDateTime>("A", &DateTime), Return("IntProperty", 4, 4)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<int32>(P, 1) = static_cast<int32>(F.Param<FDateTime>(P, 0).GetTicks() / 10000000 / 86400 / 365) + 1; });
+		AddFunction(Math, "FromSeconds", {Param("Seconds", "DoubleProperty", 8, 8), StructParam<FTimespan>("ReturnValue", &Timespan, true)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<FTimespan>(P, 1) = FTimespan(static_cast<int64>(F.Param<double>(P, 0) * 10000000)); });
+		// Class references (UClass*, TSubclassOf): the world holds the actor passed, alone.
+		AddFunction(Statics, "GetObjectClass", {Param("Object", "ObjectProperty", Ptr, Ptr), Return("ClassProperty", Ptr, Ptr)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<UClass*>(P, 1) = F.Param<UObject*>(P, 0)->GetClass(); });
+		AddFunction(Statics, "GetAllActorsOfClass",
+			{Param("WorldContextObject", "ObjectProperty", Ptr, Ptr), Param("ActorClass", "ClassProperty", Ptr, Ptr),
+				ArrayParam<UObject*>("OutActors", Param("OutActors", "ObjectProperty", Ptr, Ptr), CPF_OutParm)},
+			[](UFunction& F, UObject*, uint8* P)
+			{
+				UObject* World = F.Param<UObject*>(P, 0);
+				if (World->IsA(F.Param<UClass*>(P, 1))) F.Param<TArray<UObject*>>(P, 2).Add(World);
+			});
+		AddFunction(Math, "ClassIsChildOf", {Param("TestClass", "ClassProperty", Ptr, Ptr), Param("ParentClass", "ClassProperty", Ptr, Ptr), Return("BoolProperty", 1, 1)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<bool>(P, 2) = F.Param<UClass*>(P, 0)->IsChildOf(F.Param<UClass*>(P, 1)); });
+		AddFunction(System, "GetClassDisplayName", {Param("Class", "ClassProperty", Ptr, Ptr), Return("StrProperty", Str, StrAlign)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<FString>(P, 1) = F.Param<UClass*>(P, 0)->GetName(); });
 		AddFunction(System, "GetDisplayName", {Param("Object", "ObjectProperty", Ptr, Ptr), Return("StrProperty", Str, StrAlign)},
 			[](UFunction& F, UObject*, uint8* P) { F.Param<FString>(P, 1) = FString(F.Param<UObject*>(P, 0) ? u"Rusty actor" : u"None"); });
 	}
@@ -325,6 +389,10 @@ int main()
 	EXPECT(ToUtf8(Ferreal::HelloRust::Sweep(Actor)) == "moved=true swept=0.25 actor=true x=0.600");
 	// Arrays: of strings returned and passed, of objects passed with an FHitResult out.
 	EXPECT(ToUtf8(Ferreal::HelloRust::Trace(Actor)) == "parts=[\"a\", \"b\", \"c\"] joined=x+y hit=true z=-100 actor=true ignored=false");
+	// Core types (NoExport), mapped to Ferreal's own.
+	EXPECT(ToUtf8(Ferreal::HelloRust::CoreTypes()) == "point=4,6 cube=7 flat=3 color=255,0,0,255 box=true,3 origin=5,6,7 year=2026 hours=1");
+	// Class references: found by name (ClassOf::get), returned, passed.
+	EXPECT(ToUtf8(Ferreal::HelloRust::Classes(Actor)) == "class=Actor actor=true back=true found=true");
 	// An object of the wrong class is refused, not called.
 	EXPECT(ToUtf8(Ferreal::HelloRust::Poke(reinterpret_cast<AActor*>(Component), Component)).find("own=false") != std::string::npos
 		|| Logged("which is not a valid Actor"));

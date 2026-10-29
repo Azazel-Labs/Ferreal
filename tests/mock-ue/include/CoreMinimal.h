@@ -254,6 +254,49 @@ struct FQuat
 	double X = 0, Y = 0, Z = 0, W = 1;
 };
 
+struct FVector4
+{
+	FVector4() = default;
+	FVector4(double InX, double InY, double InZ, double InW) : X(InX), Y(InY), Z(InZ), W(InW) {}
+	double X = 0, Y = 0, Z = 0, W = 0;
+};
+
+struct FIntPoint
+{
+	FIntPoint() = default;
+	FIntPoint(int32 InX, int32 InY) : X(InX), Y(InY) {}
+	int32 X = 0, Y = 0;
+};
+
+struct FIntVector
+{
+	FIntVector() = default;
+	FIntVector(int32 InX, int32 InY, int32 InZ) : X(InX), Y(InY), Z(InZ) {}
+	int32 X = 0, Y = 0, Z = 0;
+};
+
+/** As the engine's on little-endian platforms: BGRA in memory, constructed RGBA. */
+struct FColor
+{
+	FColor() = default;
+	FColor(uint8 InR, uint8 InG, uint8 InB, uint8 InA) : B(InB), G(InG), R(InR), A(InA) {}
+	uint8 B = 0, G = 0, R = 0, A = 0;
+};
+
+struct FBox
+{
+	FBox() = default;
+	FBox(const FVector& InMin, const FVector& InMax) : Min(InMin), Max(InMax), IsValid(1) {}
+	FVector Min;
+	FVector Max;
+	uint8 IsValid = 0;
+};
+
+struct FMatrix
+{
+	double M[4][4] = {};
+};
+
 /** As the engine's: its members are not public. */
 struct FTransform
 {
@@ -295,6 +338,7 @@ struct FPropertyChangedEvent
 // their parameters through those offsets, as the engine's thunks do.
 
 class UObject;
+class UClass;
 
 enum EPropertyFlags : uint64
 {
@@ -397,7 +441,30 @@ private:
 	size_t Index = 0;
 };
 
-class UClass
+class UObject
+{
+public:
+	UObject() = default;
+	explicit UObject(const FObjectInitializer&) {}
+	virtual ~UObject() = default;
+	virtual void BeginDestroy() {}
+	virtual void PostEditChangeProperty(FPropertyChangedEvent&) {}
+
+	UClass* GetClass() const { return MockClass; }
+	inline bool IsA(const UClass* C) const;
+	inline UFunction* FindFunction(const FName& N) const;
+	void ProcessEvent(UFunction* F, void* Parms) { F->Native(this, static_cast<uint8*>(Parms)); }
+	FString GetName() const { return FName(MockName.c_str()).ToString(); }
+
+	// Not Unreal's: the mock's (names that the generated classes' properties cannot clash with).
+	UClass* MockClass = nullptr;
+	std::string MockName = "Object";
+};
+
+inline bool IsValid(const UObject* O) { return O != nullptr; }
+
+/** A class: an object, as the engine's. */
+class UClass : public UObject
 {
 public:
 	UClass(std::string InName, UClass* InSuper) : Name(std::move(InName)), Super(InSuper) {}
@@ -440,27 +507,26 @@ T* FindObject(UObject*, const TCHAR* Path)
 	return It == FerrealMockClasses().end() ? nullptr : It->second;
 }
 
-class UObject
+enum class EFindFirstObjectOptions
 {
-public:
-	UObject() = default;
-	explicit UObject(const FObjectInitializer&) {}
-	virtual ~UObject() = default;
-	virtual void BeginDestroy() {}
-	virtual void PostEditChangeProperty(FPropertyChangedEvent&) {}
-
-	UClass* GetClass() const { return MockClass; }
-	bool IsA(const UClass* C) const { return MockClass && MockClass->IsChildOf(C); }
-	UFunction* FindFunction(const FName& N) const { return MockClass ? MockClass->FindFunctionByName(N) : nullptr; }
-	void ProcessEvent(UFunction* F, void* Parms) { F->Native(this, static_cast<uint8*>(Parms)); }
-	FString GetName() const { return FName(MockName.c_str()).ToString(); }
-
-	// Not Unreal's: the mock's (names that the generated classes' properties cannot clash with).
-	UClass* MockClass = nullptr;
-	std::string MockName = "Object";
+	None = 0,
+	NativeFirst = 2,
 };
 
-inline bool IsValid(const UObject* O) { return O != nullptr; }
+/** A class by its name (`Actor`), as FindFirstObject<UClass> finds it. */
+template <typename T>
+T* FindFirstObject(const TCHAR* Name, EFindFirstObjectOptions = EFindFirstObjectOptions::None)
+{
+	for (const auto& [Path, Class] : FerrealMockClasses())
+	{
+		if (Class->GetName() == Name) return Class;
+	}
+	return nullptr;
+}
+
+inline bool UObject::IsA(const UClass* C) const { return MockClass && MockClass->IsChildOf(C); }
+inline UFunction* UObject::FindFunction(const FName& N) const { return MockClass ? MockClass->FindFunctionByName(N) : nullptr; }
+
 
 template <typename T>
 class TObjectPtr

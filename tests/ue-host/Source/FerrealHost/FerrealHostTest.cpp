@@ -57,6 +57,16 @@ bool FFerrealHelloTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Sweep"), Sweep, FString(TEXT("moved=true swept=1 actor=false x=0.600")));
 	TestEqual(TEXT("Sweep moved the actor"), Actor->GetActorLocation().Z, 7.0, 1e-6);
 
+	// Core types (NoExport), mapped to Ferreal's own.
+	const FString Core = Ferreal::HelloRust::CoreTypes();
+	AddInfo(TEXT("CoreTypes: ") + Core);
+	TestEqual(TEXT("CoreTypes"), Core, FString(TEXT("point=4,6 cube=7 flat=3 color=255,0,0,255 box=true,3 origin=5,6,7 year=2026 hours=1")));
+
+	// Class references: the actor's class, its parent's (found by name), the world's actors.
+	const FString Classes = Ferreal::HelloRust::Classes(Actor);
+	AddInfo(TEXT("Classes: ") + Classes);
+	TestEqual(TEXT("Classes"), Classes, FString(TEXT("class=StaticMeshActor actor=true back=false found=true")));
+
 	// Arrays: strings returned and passed, objects passed. The trace, down from the origin,
 	// hits the top of a cube under it (at z -10, Poke's turn undone), unless the actor is ignored.
 	Mesh->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")));

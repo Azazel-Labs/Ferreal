@@ -171,4 +171,148 @@ macro_rules! carry_self {
     )*};
 }
 
-carry_self!(LinearColor, Vector2, Vector3, Rotator, Quat, Transform);
+carry_self!(
+    LinearColor,
+    Vector2,
+    Vector3,
+    Rotator,
+    Quat,
+    Transform,
+    Vector4,
+    IntPoint,
+    IntVector,
+    Color,
+    Box3,
+    Matrix,
+    DateTime,
+    Timespan
+);
+
+/// `FVector4`: four doubles.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Vector4 {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub w: f64,
+}
+
+impl Vector4 {
+    pub const fn new(x: f64, y: f64, z: f64, w: f64) -> Self {
+        Vector4 { x, y, z, w }
+    }
+}
+
+/// `FIntPoint`: two `int32`s.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct IntPoint {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl IntPoint {
+    pub const fn new(x: i32, y: i32) -> Self {
+        IntPoint { x, y }
+    }
+}
+
+/// `FIntVector`: three `int32`s.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct IntVector {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+}
+
+impl IntVector {
+    pub const fn new(x: i32, y: i32, z: i32) -> Self {
+        IntVector { x, y, z }
+    }
+}
+
+/// `FColor`: sRGB bytes (in RGBA order here, whatever order the platform keeps them in).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Color {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+impl Color {
+    pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Color { r, g, b, a }
+    }
+}
+
+/// `FBox`: an axis-aligned box, valid once it holds a point.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Box3 {
+    pub min: Vector3,
+    pub max: Vector3,
+    pub is_valid: bool,
+}
+
+impl Box3 {
+    /// The box from `min` to `max` (valid).
+    pub const fn new(min: Vector3, max: Vector3) -> Self {
+        Box3 {
+            min,
+            max,
+            is_valid: true,
+        }
+    }
+}
+
+/// `FMatrix`: four rows of four doubles (`M[row][column]`, as Unreal's).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Matrix {
+    pub m: [[f64; 4]; 4],
+}
+
+impl Matrix {
+    pub const IDENTITY: Matrix = Matrix {
+        m: [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    };
+}
+
+impl Default for Matrix {
+    fn default() -> Self {
+        Matrix::IDENTITY
+    }
+}
+
+/// `FDateTime`: ticks of 100 nanoseconds since midnight, January 1, 0001.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DateTime {
+    pub ticks: i64,
+}
+
+/// `FTimespan`: a duration, in ticks of 100 nanoseconds.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Timespan {
+    pub ticks: i64,
+}
+
+impl Timespan {
+    pub const TICKS_PER_SECOND: i64 = 10_000_000;
+
+    pub const fn from_seconds(seconds: i64) -> Self {
+        Timespan {
+            ticks: seconds * Self::TICKS_PER_SECOND,
+        }
+    }
+}

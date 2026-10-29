@@ -347,3 +347,61 @@ pub fn trace(actor: Obj<engine::Actor>) -> String {
         result.hit_object_handle == Some(actor)
     )
 }
+
+/// `Ferreal::HelloRust::Classes(...)` from C++: class references (`TSubclassOf`, `UClass*`).
+/// `ClassOf::<C>::get()` is `C`'s class; a function taking a `TSubclassOf<C>` takes the class
+/// of anything that `IsA<C>`.
+#[export]
+pub fn classes(actor: Obj<engine::Actor>) -> String {
+    use engine::{GameplayStatics, KismetMathLibrary, KismetSystemLibrary};
+
+    let actors = ClassOf::<engine::Actor>::get();
+    let class = GameplayStatics::get_object_class(Some(actor));
+    let name = class.map(|c| KismetSystemLibrary::get_class_display_name(Some(c)));
+    let child = KismetMathLibrary::class_is_child_of(class, actors);
+    let back = KismetMathLibrary::class_is_child_of(actors, class);
+    let found = GameplayStatics::get_all_actors_of_class(Some(actor), actors);
+    format!(
+        "class={} actor={child} back={back} found={}",
+        name.unwrap_or_default(),
+        found.contains(&Some(actor))
+    )
+}
+
+/// `Ferreal::HelloRust::CoreTypes()` from C++: core types Unreal Header Tool is told about
+/// apart from their C++ (`FIntPoint`, `FColor`, `FBox`, `FMatrix`, `FDateTime`, ...), which
+/// Ferreal maps to its own.
+#[export]
+pub fn core_types() -> String {
+    use engine::KismetMathLibrary as Math;
+    use ferreal::{IntPoint, Matrix, Vector4};
+
+    let point = Math::add_int_point_int_point(IntPoint::new(1, 2), IntPoint::new(3, 4));
+    let cube = Math::conv_int_to_int_vector(7);
+    let flat = Math::conv_vector4_to_vector(Vector4::new(1.0, 2.0, 3.0, 4.0));
+    let color = Math::conv_linear_color_to_color(LinearColor::new(1.0, 0.0, 0.0, 1.0), false);
+    let bounds = Math::make_box(Vector3::ZERO, Vector3::new(1.0, 2.0, 3.0));
+    let mut moved = Matrix::IDENTITY;
+    moved.m[3] = [5.0, 6.0, 7.0, 1.0];
+    let origin = Math::matrix_get_origin(moved);
+    let date = Math::make_date_time(2026, 10, 28, 12, 0, 0, 0);
+    let later = Math::add_date_time_timespan(date, Math::from_seconds(3600.0));
+    let hours = (later.ticks - date.ticks) / ferreal::Timespan::TICKS_PER_SECOND / 3600;
+    format!(
+        "point={},{} cube={} flat={} color={},{},{},{} box={},{} origin={},{},{} year={} hours={hours}",
+        point.x,
+        point.y,
+        cube.z,
+        flat.z,
+        color.r,
+        color.g,
+        color.b,
+        color.a,
+        bounds.is_valid,
+        bounds.max.z,
+        origin.x,
+        origin.y,
+        origin.z,
+        Math::get_year(later)
+    )
+}

@@ -7,6 +7,9 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
+#include "UObject/Class.h"
+#include "Misc/DateTime.h"
+#include "Misc/Timespan.h"
 #include "Templates/Casts.h"
 
 static_assert(sizeof(TCHAR) == 2, "Ferreal passes FString characters to Rust as UTF-16");
@@ -77,6 +80,48 @@ namespace Ferreal
 		FVec3 Scale;
 	};
 
+	// Core types Unreal Header Tool is told about apart from their C++ (NoExport), copied
+	// through their public members.
+
+	struct FVec4
+	{
+		double X, Y, Z, W;
+	};
+
+	struct FInt2
+	{
+		int32 X, Y;
+	};
+
+	struct FInt3
+	{
+		int32 X, Y, Z;
+	};
+
+	/** RGBA, whatever order FColor keeps its bytes in on the platform. */
+	struct FColor8
+	{
+		uint8 R, G, B, A;
+	};
+
+	struct FBox3
+	{
+		FVec3 Min;
+		FVec3 Max;
+		bool IsValid;
+	};
+
+	struct FMat4
+	{
+		double M[4][4];
+	};
+
+	/** FDateTime, FTimespan: ticks of 100 nanoseconds. */
+	struct FTicks
+	{
+		int64 Ticks;
+	};
+
 	inline FStr16 ToStr16(const FString& S)
 	{
 		return FStr16{reinterpret_cast<const uint16*>(*S), static_cast<size_t>(S.Len())};
@@ -125,6 +170,50 @@ namespace Ferreal
 	{
 		return FTransform(FromQuat(X.Rotation), FromVec3(X.Translation), FromVec3(X.Scale));
 	}
+
+	inline FVec4 ToVec4(const FVector4& V) { return FVec4{V.X, V.Y, V.Z, V.W}; }
+	inline FVector4 FromVec4(FVec4 V) { return FVector4(V.X, V.Y, V.Z, V.W); }
+	inline FInt2 ToInt2(const FIntPoint& P) { return FInt2{P.X, P.Y}; }
+	inline FIntPoint FromInt2(FInt2 P) { return FIntPoint(P.X, P.Y); }
+	inline FInt3 ToInt3(const FIntVector& V) { return FInt3{V.X, V.Y, V.Z}; }
+	inline FIntVector FromInt3(FInt3 V) { return FIntVector(V.X, V.Y, V.Z); }
+	inline FColor8 ToColor8(const FColor& C) { return FColor8{C.R, C.G, C.B, C.A}; }
+	inline FColor FromColor8(FColor8 C) { return FColor(C.R, C.G, C.B, C.A); }
+	inline FBox3 ToBox3(const FBox& B) { return FBox3{ToVec3(B.Min), ToVec3(B.Max), B.IsValid != 0}; }
+	inline FBox FromBox3(const FBox3& B)
+	{
+		FBox Out(FromVec3(B.Min), FromVec3(B.Max));
+		Out.IsValid = B.IsValid ? 1 : 0;
+		return Out;
+	}
+	inline FMat4 ToMat4(const FMatrix& M)
+	{
+		FMat4 Out;
+		for (int32 R = 0; R < 4; ++R)
+		{
+			for (int32 C = 0; C < 4; ++C)
+			{
+				Out.M[R][C] = M.M[R][C];
+			}
+		}
+		return Out;
+	}
+	inline FMatrix FromMat4(const FMat4& M)
+	{
+		FMatrix Out;
+		for (int32 R = 0; R < 4; ++R)
+		{
+			for (int32 C = 0; C < 4; ++C)
+			{
+				Out.M[R][C] = M.M[R][C];
+			}
+		}
+		return Out;
+	}
+	inline FTicks ToTicks(const FDateTime& D) { return FTicks{D.GetTicks()}; }
+	inline FTicks ToTicks(const FTimespan& T) { return FTicks{T.GetTicks()}; }
+	inline FDateTime FromDateTicks(FTicks T) { return FDateTime(T.Ticks); }
+	inline FTimespan FromSpanTicks(FTicks T) { return FTimespan(T.Ticks); }
 
 	inline void* ToObj(const UObject* P) { return const_cast<UObject*>(P); }
 

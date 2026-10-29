@@ -52,12 +52,15 @@ mod types;
 pub use ferreal_macros::{
     cpp, cpp_base, cpp_include, engine, engine_class, export, module, uclass, uclass_impl, uenum,
 };
-pub use obj::{AsObject, Class, Derives, IsA, Obj, obj_from_ffi, objs_from_ffi};
-pub use types::{Carry, LinearColor, Quat, Rotator, Transform, UEnum, Vector2, Vector3};
+pub use obj::{AsObject, Class, ClassOf, Derives, IsA, Obj, obj_from_ffi, objs_from_ffi};
+pub use types::{
+    Box3, Carry, Color, DateTime, IntPoint, IntVector, LinearColor, Matrix, Quat, Rotator,
+    Timespan, Transform, UEnum, Vector2, Vector3, Vector4,
+};
 
 pub mod prelude {
     pub use crate::{
-        AsObject, IsA, LinearColor, Obj, Quat, Rotator, Transform, UEnum, Vector2, Vector3, cpp,
-        cpp_base, engine, engine_class, export, uclass, uclass_impl, uenum,
+        AsObject, ClassOf, IsA, LinearColor, Obj, Quat, Rotator, Transform, UEnum, Vector2,
+        Vector3, cpp, cpp_base, engine, engine_class, export, uclass, uclass_impl, uenum,
     };
 }

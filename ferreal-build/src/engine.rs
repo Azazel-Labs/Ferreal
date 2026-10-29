@@ -298,9 +298,103 @@ enum PTy {
     Weak(String),
     /// An `FActorInstanceHandle` (`FHitResult::HitObjectHandle`), as its actor.
     ActorHandle,
+    /// A class deriving from this C++ class (`TSubclassOf`, `UClass*`).
+    ClassRef(String),
+    /// A core type mapped to Ferreal's own.
+    Core(Core),
     /// A `TArray` (parameters only): copied element by element, a slice from Rust, a `Vec`
     /// to it.
     Array(Box<PTy>),
+}
+
+/// A core type Unreal Header Tool is told about apart from its C++ (NoExport), which Ferreal
+/// maps to its own (`FIntPoint` → `ferreal::IntPoint`) through its public C++ members.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Core {
+    Vector4,
+    IntPoint,
+    IntVector,
+    Color,
+    Box,
+    Matrix,
+    DateTime,
+    Timespan,
+}
+
+impl Core {
+    const ALL: [Core; 8] = [
+        Core::Vector4,
+        Core::IntPoint,
+        Core::IntVector,
+        Core::Color,
+        Core::Box,
+        Core::Matrix,
+        Core::DateTime,
+        Core::Timespan,
+    ];
+
+    fn of(cpp: &str) -> Option<Core> {
+        Core::ALL.into_iter().find(|c| c.cpp() == cpp)
+    }
+
+    /// The type of this Rust name (a `cpp!` capture's).
+    fn named(name: &str) -> Option<Core> {
+        Core::ALL.into_iter().find(|c| c.name() == name)
+    }
+
+    fn cpp(self) -> &'static str {
+        match self {
+            Core::Vector4 => "FVector4",
+            Core::IntPoint => "FIntPoint",
+            Core::IntVector => "FIntVector",
+            Core::Color => "FColor",
+            Core::Box => "FBox",
+            Core::Matrix => "FMatrix",
+            Core::DateTime => "FDateTime",
+            Core::Timespan => "FTimespan",
+        }
+    }
+
+    /// Its Rust name, in the `ferreal` crate.
+    fn name(self) -> &'static str {
+        match self {
+            Core::Vector4 => "Vector4",
+            Core::IntPoint => "IntPoint",
+            Core::IntVector => "IntVector",
+            Core::Color => "Color",
+            Core::Box => "Box3",
+            Core::Matrix => "Matrix",
+            Core::DateTime => "DateTime",
+            Core::Timespan => "Timespan",
+        }
+    }
+
+    /// Its C++ carrier (`FerrealRuntime.h`), laid out as the Rust type.
+    fn carrier(self) -> &'static str {
+        match self {
+            Core::Vector4 => "Ferreal::FVec4",
+            Core::IntPoint => "Ferreal::FInt2",
+            Core::IntVector => "Ferreal::FInt3",
+            Core::Color => "Ferreal::FColor8",
+            Core::Box => "Ferreal::FBox3",
+            Core::Matrix => "Ferreal::FMat4",
+            Core::DateTime | Core::Timespan => "Ferreal::FTicks",
+        }
+    }
+
+    /// The conversions to its carrier and from it.
+    fn conversions(self) -> (&'static str, &'static str) {
+        match self {
+            Core::Vector4 => ("Ferreal::ToVec4", "Ferreal::FromVec4"),
+            Core::IntPoint => ("Ferreal::ToInt2", "Ferreal::FromInt2"),
+            Core::IntVector => ("Ferreal::ToInt3", "Ferreal::FromInt3"),
+            Core::Color => ("Ferreal::ToColor8", "Ferreal::FromColor8"),
+            Core::Box => ("Ferreal::ToBox3", "Ferreal::FromBox3"),
+            Core::Matrix => ("Ferreal::ToMat4", "Ferreal::FromMat4"),
+            Core::DateTime => ("Ferreal::ToTicks", "Ferreal::FromDateTicks"),
+            Core::Timespan => ("Ferreal::ToTicks", "Ferreal::FromSpanTicks"),
+        }
+    }
 }
 
 /// How a struct is copied: the fields Ferreal carries, and those it leaves out (at their C++
@@ -397,6 +491,13 @@ impl Types<'_> {
                     Err(why) => return Err(format!("an array of {why}")),
                 }
             }
+            "class" => {
+                let c = t.class.clone().unwrap_or_else(|| "UObject".into());
+                if !self.classes.contains_key(c.as_str()) {
+                    return Err(format!("a class of {c}, which was not exported"));
+                }
+                PTy::ClassRef(c)
+            }
             k => return Err(format!("a {k} ({})", t.property)),
         })
     }
@@ -410,6 +511,7 @@ impl Types<'_> {
             "FRotator" => return Ok(PTy::Rotator),
             "FQuat" => return Ok(PTy::Quat),
             "FTransform" => return Ok(PTy::Transform),
+            c if Core::of(c).is_some() => return Ok(PTy::Core(Core::of(c).unwrap())),
             "FActorInstanceHandle" if self.classes.contains_key("AActor") => {
                 return Ok(PTy::ActorHandle);
             }
@@ -648,9 +750,10 @@ pub struct Bindings {
     pub lock: Metadata,
 }
 
-/// `Rotator`, `Quat`, `Transform`: math types `cpp!` passes by name, Ferreal's own.
+/// `Rotator`, `Quat`, `Transform`, `IntPoint`, ...: math and core types `cpp!` passes by
+/// name, Ferreal's own.
 fn is_math(name: &str) -> bool {
-    matches!(name, "Rotator" | "Quat" | "Transform")
+    matches!(name, "Rotator" | "Quat" | "Transform") || Core::named(name).is_some()
 }
 
 /// A type a `cpp!` block passes by name, as its C++ sees it, with an enum's C++ type
@@ -707,6 +810,9 @@ impl Bindings {
             "Rotator" => return Some(Named(PTy::Rotator, None)),
             "Quat" => return Some(Named(PTy::Quat, None)),
             "Transform" => return Some(Named(PTy::Transform, None)),
+            n if Core::named(n).is_some() => {
+                return Some(Named(PTy::Core(Core::named(n).unwrap()), None));
+            }
             _ => {}
         }
         if let Some((cpp, _)) = self.struct_names.iter().find(|(_, n)| *n == name) {
@@ -883,7 +989,7 @@ pub fn resolve(
                 Ok(b) => {
                     for p in b.params.iter().chain(&b.ret) {
                         match p.ty.elem() {
-                            PTy::Obj(c) => needed.extend(ancestors(c)),
+                            PTy::Obj(c) | PTy::ClassRef(c) => needed.extend(ancestors(c)),
                             PTy::ActorHandle => needed.extend(ancestors("AActor")),
                             PTy::Enum { name, .. } => {
                                 used_enums.insert(name.clone());
@@ -960,7 +1066,7 @@ pub fn resolve(
     for p in &structs {
         for f in &p.fields {
             match &f.ty {
-                PTy::Obj(c) | PTy::Weak(c) => needed.extend(ancestors(c)),
+                PTy::Obj(c) | PTy::Weak(c) | PTy::ClassRef(c) => needed.extend(ancestors(c)),
                 PTy::ActorHandle => needed.extend(ancestors("AActor")),
                 PTy::Enum { name, .. } => {
                     used_enums.insert(name.clone());
@@ -1207,7 +1313,9 @@ pub fn snake(name: &str) -> String {
         if c.is_uppercase() && i > 0 && !out.ends_with('_') {
             let prev = chars[i - 1];
             let next_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
-            if prev.is_lowercase() || (prev.is_uppercase() && next_lower) {
+            // A word after a lowercase letter, after an acronym, or after a number (`Vector4To`).
+            if prev.is_lowercase() || ((prev.is_uppercase() || prev.is_ascii_digit()) && next_lower)
+            {
                 out.push('_');
             }
         }
@@ -1283,6 +1391,7 @@ impl PTy {
                 | PTy::Rotator
                 | PTy::Quat
                 | PTy::Transform
+                | PTy::Core(_)
         )
     }
 
@@ -1291,10 +1400,12 @@ impl PTy {
         match self {
             PTy::Str | PTy::Name => "&str".into(),
             PTy::Obj(_) => format!("::core::option::Option<::ferreal::Obj<{generic}>>"),
+            PTy::ClassRef(_) => format!("::core::option::Option<::ferreal::ClassOf<{generic}>>"),
             PTy::Struct(s) => format!("&{}", b.struct_names[s]),
             PTy::Array(e) => match &**e {
                 PTy::Str | PTy::Name => "&[&str]".into(),
                 PTy::Obj(c) => format!("&[::ferreal::Obj<{}>]", b.path(c)),
+                PTy::ClassRef(c) => format!("&[::ferreal::ClassOf<{}>]", b.path(c)),
                 e => format!("&[{}]", e.rust_value(b)),
             },
             _ => self.rust_value(b),
@@ -1319,6 +1430,7 @@ impl PTy {
             PTy::Rotator => "::ferreal::Rotator".into(),
             PTy::Quat => "::ferreal::Quat".into(),
             PTy::Transform => "::ferreal::Transform".into(),
+            PTy::Core(c) => format!("::ferreal::{}", c.name()),
             PTy::Obj(c) | PTy::Weak(c) => {
                 format!("::core::option::Option<::ferreal::Obj<{}>>", b.path(c))
             }
@@ -1327,6 +1439,9 @@ impl PTy {
                     "::core::option::Option<::ferreal::Obj<{}>>",
                     b.path("AActor")
                 )
+            }
+            PTy::ClassRef(c) => {
+                format!("::core::option::Option<::ferreal::ClassOf<{}>>", b.path(c))
             }
             PTy::Struct(s) => b.struct_names[s].clone(),
             PTy::Array(e) => format!("::std::vec::Vec<{}>", e.rust_value(b)),
@@ -1338,7 +1453,9 @@ impl PTy {
         match self {
             PTy::Str | PTy::Name => "::ferreal::ffi::Str8".into(),
             PTy::Enum { value, .. } => value.rust().into(),
-            PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle => "::ferreal::ffi::RawObj".into(),
+            PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle | PTy::ClassRef(_) => {
+                "::ferreal::ffi::RawObj".into()
+            }
             PTy::Struct(s) => format!("{s}Out"),
             PTy::Array(e) => format!("::ferreal::ffi::Slice<{}>", e.rust_carrier_out()),
             _ => self.rust_value_plain(),
@@ -1350,7 +1467,9 @@ impl PTy {
         match self {
             PTy::Str | PTy::Name => "::ferreal::ffi::Str16".into(),
             PTy::Enum { value, .. } => value.rust().into(),
-            PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle => "::ferreal::ffi::RawObj".into(),
+            PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle | PTy::ClassRef(_) => {
+                "::ferreal::ffi::RawObj".into()
+            }
             PTy::Struct(s) => format!("{s}In"),
             PTy::Array(_) => "::ferreal::ffi::Sink".into(),
             _ => self.rust_value_plain(),
@@ -1372,6 +1491,7 @@ impl PTy {
             PTy::Rotator => "::ferreal::Rotator",
             PTy::Quat => "::ferreal::Quat",
             PTy::Transform => "::ferreal::Transform",
+            PTy::Core(c) => return format!("::ferreal::{}", c.name()),
             _ => unreachable!("not a plain carrier"),
         }
         .into()
@@ -1382,7 +1502,7 @@ impl PTy {
         match self {
             PTy::Str | PTy::Name => format!("::ferreal::ffi::Str8::new({v})"),
             PTy::Enum { .. } => format!("{v}.0"),
-            PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle => {
+            PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle | PTy::ClassRef(_) => {
                 format!("{v}.map_or(::ferreal::ffi::RawObj::NULL, |o| o.raw())")
             }
             PTy::Struct(_) => format!("::ferreal::Carry::to_out({v})"),
@@ -1397,8 +1517,8 @@ impl PTy {
         let convert = match self {
             PTy::Str | PTy::Name => "::ferreal::ffi::Str8::new(e)",
             PTy::Enum { .. } => "e.0",
-            PTy::Obj(_) if !value => "e.raw()",
-            PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle => {
+            PTy::Obj(_) | PTy::ClassRef(_) if !value => "e.raw()",
+            PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle | PTy::ClassRef(_) => {
                 "e.map_or(::ferreal::ffi::RawObj::NULL, |o| o.raw())"
             }
             PTy::Struct(_) => "::ferreal::Carry::to_out(e)",
@@ -1446,6 +1566,7 @@ impl PTy {
             PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle => {
                 format!("::ferreal::Obj::from_raw({v})")
             }
+            PTy::ClassRef(_) => format!("::ferreal::ClassOf::from_raw({v})"),
             PTy::Struct(s) => format!("<{} as ::ferreal::Carry>::from_in({v})", b.struct_names[s]),
             // Collected already.
             PTy::Array(_) => v.into(),
@@ -1472,10 +1593,13 @@ impl PTy {
             PTy::Rotator => "FRotator",
             PTy::Quat => "FQuat",
             PTy::Transform => "FTransform",
+            PTy::Core(c) => c.cpp(),
             PTy::Obj(_) => "UObject*",
             PTy::Struct(s) => s,
             PTy::Weak(c) => return format!("TWeakObjectPtr<{c}>"),
             PTy::ActorHandle => "FActorInstanceHandle",
+            // Laid out as the TSubclassOf it stands for.
+            PTy::ClassRef(_) => "UClass*",
             PTy::Array(e) => return format!("TArray<{}>", e.cpp_member()),
         }
         .into()
@@ -1492,7 +1616,8 @@ impl PTy {
             PTy::Rotator => "Ferreal::FRot".into(),
             PTy::Quat => "Ferreal::FQuat4".into(),
             PTy::Transform => "Ferreal::FXform".into(),
-            PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle => "void*".into(),
+            PTy::Core(c) => c.carrier().into(),
+            PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle | PTy::ClassRef(_) => "void*".into(),
             PTy::Enum { value, .. } => value.cpp().into(),
             PTy::Struct(s) => format!("FStruct_{s}_{}", if inbound { "In" } else { "Out" }),
             PTy::Array(_) if inbound => "Ferreal::FSink".into(),
@@ -1512,8 +1637,10 @@ impl PTy {
             PTy::Rotator => format!("Ferreal::FromRot({e})"),
             PTy::Quat => format!("Ferreal::FromQuat({e})"),
             PTy::Transform => format!("Ferreal::FromXform({e})"),
+            PTy::Core(c) => format!("{}({e})", c.conversions().1),
             PTy::Obj(_) => format!("static_cast<UObject*>({e})"),
             PTy::Weak(c) => format!("Ferreal::FromObj<{c}>({e})"),
+            PTy::ClassRef(_) => format!("static_cast<UClass*>({e})"),
             // By its class' path: Cast<AActor> would link Engine's AActor::StaticClass.
             PTy::ActorHandle => format!(
                 "FActorInstanceHandle(Ferreal::FromObjOf<AActor>({e}, TEXT(\"/Script/Engine.Actor\")))"
@@ -1540,8 +1667,11 @@ impl PTy {
             PTy::Rotator => format!("Ferreal::ToRot({e})"),
             PTy::Quat => format!("Ferreal::ToQuat({e})"),
             PTy::Transform => format!("Ferreal::ToXform({e})"),
+            PTy::Core(c) => format!("{}({e})", c.conversions().0),
             PTy::Obj(_) => format!("Ferreal::ToObj({e})"),
             PTy::Weak(_) => format!("Ferreal::ToObj({e}.Get())"),
+            // A UClass*, or a TSubclassOf (a struct's field) as one.
+            PTy::ClassRef(_) => format!("Ferreal::ToObj(static_cast<UClass*>({e}))"),
             // As FHitResult::GetActor does (which may make a lightweight instance an actor).
             PTy::ActorHandle => format!("Ferreal::ToObj({e}.FetchActor())"),
             PTy::Enum { value, .. } => format!("static_cast<{}>({e})", value.cpp()),
@@ -1944,7 +2074,7 @@ impl Bindings {
             match p.dir {
                 Dir::In => {
                     let generic = format!("P{k}");
-                    if let PTy::Obj(c) = &p.ty {
+                    if let PTy::Obj(c) | PTy::ClassRef(c) = &p.ty {
                         generics.push(format!("{generic}: ::ferreal::IsA<{}>", self.path(c)));
                     }
                     params.push(format!("{}: {}", p.rust, p.ty.rust_param(self, &generic)));
@@ -2004,7 +2134,11 @@ impl Bindings {
                         PTy::Str | PTy::Name => format!("{}.as_str()", p.rust),
                         PTy::Struct(_) => format!("&*{}", p.rust),
                         // A receiver needs the parentheses.
-                        PTy::Enum { .. } | PTy::Obj(_) | PTy::Weak(_) | PTy::ActorHandle => {
+                        PTy::Enum { .. }
+                        | PTy::Obj(_)
+                        | PTy::Weak(_)
+                        | PTy::ActorHandle
+                        | PTy::ClassRef(_) => {
                             format!("(*{})", p.rust)
                         }
                         _ => format!("*{}", p.rust),
@@ -2124,8 +2258,10 @@ impl Bindings {
                 "\n\t// {}::{}\n\tstruct FEngineParms{i}\n\t{{",
                 f.class, fm.cpp
             );
+            // Each member value-initialized directly: `Parms{}` alone would copy-initialize
+            // them, which a type with an explicit default constructor (FVector4) refuses.
             for p in f.params.iter().chain(&f.ret) {
-                let _ = writeln!(o, "\t\t{} {};", p.ty.cpp_member(), p.cpp);
+                let _ = writeln!(o, "\t\t{} {}{{}};", p.ty.cpp_member(), p.cpp);
             }
             o.push_str("\t};\n");
             let args = cpp_args(f);
@@ -2230,6 +2366,8 @@ mod tests {
         assert_eq!(snake("SetUIScale"), "set_ui_scale");
         assert_eq!(snake("SetActorScale3D"), "set_actor_scale3d");
         assert_eq!(snake("Get2DPosition"), "get2d_position");
+        assert_eq!(snake("Conv_Vector4ToVector"), "conv_vector4_to_vector");
+        assert_eq!(snake("Conv_Int64ToInt"), "conv_int64_to_int");
         assert_eq!(snake("Concat_StrStr"), "concat_str_str");
         assert_eq!(param_name("bNewHidden", true), "new_hidden");
         assert_eq!(param_name("bNewHidden", false), "b_new_hidden");
@@ -2269,7 +2407,7 @@ mod tests {
         let mut hit = param("SweepHitResult", location.clone());
         hit.out = true;
         let mut turn = ty("struct", "StructProperty");
-        turn.strukt = Some("FColor".into());
+        turn.strukt = Some("FSlateColor".into());
         let actor = ClassMeta {
             cpp: "AActor".into(),
             path: "/Script/Engine.Actor".into(),
@@ -2346,14 +2484,14 @@ mod tests {
         assert!(rust.contains("impl ::ferreal::IsA<Object> for Actor {}"));
         assert!(rust.contains("impl ::ferreal::IsA<Actor> for crate::Spinner {}"));
         assert!(!rust.contains("SpinnerApi"));
-        assert!(rust.contains("AActor::Tint: Color is struct FColor, which was not exported"));
+        assert!(rust.contains("AActor::Tint: Color is struct FSlateColor, which was not exported"));
         // An output: returned.
         assert!(rust.contains(
             "fn set_actor_location(&self, new_location: ::ferreal::Vector3) -> ::ferreal::Vector3"
         ));
         let cpp = b.cpp_thunks();
-        assert!(cpp.contains("bool bNewHidden;"));
-        assert!(cpp.contains("UObject* ReturnValue;"));
+        assert!(cpp.contains("bool bNewHidden{};"));
+        assert!(cpp.contains("UObject* ReturnValue{};"));
         assert!(cpp.contains("Ferreal::FVec3* OutSweepHitResult"));
         assert!(cpp.contains("*OutSweepHitResult = Ferreal::ToVec3(Parms.SweepHitResult);"));
         assert!(cpp.contains("TEXT(\"/Script/Engine.Actor\"), TEXT(\"GetOwner\"), false"));

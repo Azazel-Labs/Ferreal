@@ -1,13 +1,15 @@
 //! Logging to Unreal's output log (the module's `LogFerreal<Module>` category), through the
 //! table C++ registers when the module starts. Before that, messages go to stderr.
 
-use crate::ffi::{Str8, Table};
+use crate::ffi::{RawObj, Str8, Table};
 
 /// The module's table of C++ functions.
 #[repr(C)]
 pub struct ModuleTable {
     /// `level`: 0 info, 1 warning, 2 error.
     pub log: extern "C" fn(level: u8, message: Str8),
+    /// The `UClass` of this name (`Actor`), or null.
+    pub find_class: extern "C" fn(name: Str8) -> RawObj,
 }
 
 #[doc(hidden)]

@@ -689,7 +689,7 @@ impl<'a> Gen<'a> {
 
         // Tables Rust receives.
         let _ = writeln!(o, "namespace Ferreal::{m}::Detail\n{{");
-        o.push_str("\tstruct FModuleTable\n\t{\n\t\tvoid (*Log)(uint8 Level, Ferreal::FStr8 Message);\n\t};\n");
+        o.push_str("\tstruct FModuleTable\n\t{\n\t\tvoid (*Log)(uint8 Level, Ferreal::FStr8 Message);\n\t\tvoid* (*FindClass)(Ferreal::FStr8 Name);\n\t};\n");
         for c in &self.model.classes {
             let c = &c.class;
             let _ = writeln!(o, "\n\tstruct FTable_{}\n\t{{", c.name);
@@ -835,6 +835,8 @@ impl<'a> Gen<'a> {
             o,
             "\tstatic void Log(uint8 Level, Ferreal::FStr8 Message)\n\t{{\n\t\tconst FString Text = Ferreal::ToFString(Message);\n\t\tswitch (Level)\n\t\t{{\n\t\tcase 0: UE_LOG(LogFerreal{m}, Log, TEXT(\"%s\"), *Text); break;\n\t\tcase 1: UE_LOG(LogFerreal{m}, Warning, TEXT(\"%s\"), *Text); break;\n\t\tdefault: UE_LOG(LogFerreal{m}, Error, TEXT(\"%s\"), *Text); break;\n\t\t}}\n\t}}"
         );
+        // ClassOf::<C>::get(): a native class first, should a Blueprint share its name.
+        o.push_str("\n\tstatic void* FindClass(Ferreal::FStr8 Name)\n\t{\n\t\treturn Ferreal::ToObj(FindFirstObject<UClass>(*Ferreal::ToFString(Name), EFindFirstObjectOptions::NativeFirst));\n\t}\n");
         for c in &self.model.classes {
             let c = &c.class;
             for p in &c.properties {
@@ -908,7 +910,7 @@ impl<'a> Gen<'a> {
         );
         let _ = writeln!(
             o,
-            "\t\tstatic const Detail::FModuleTable ModuleTable = {{&Detail::Log}};\n\t\t{}(&ModuleTable);",
+            "\t\tstatic const Detail::FModuleTable ModuleTable = {{&Detail::Log, &Detail::FindClass}};\n\t\t{}(&ModuleTable);",
             s.init()
         );
         for c in &self.model.classes {

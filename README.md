@@ -247,10 +247,22 @@ The generated C++ sits in the module's `Source`, so the IDE project Unreal gener
 it too.
 
 Parameters: the types above, `FName` (as `&str`/`String`), `FRotator`, `FQuat` and
-`FTransform` (`Rotator`, `Quat`, `Transform`), enums (as `TEnumAsByte` or as themselves), and
-structs, and arrays of these. `FText`, class references (`TSubclassOf`), soft references,
-maps, sets, delegates or interfaces are left out for now; the generated file lists the
-functions they leave out, with why.
+`FTransform` (`Rotator`, `Quat`, `Transform`), the core types below, enums (of every form:
+reflection holds an `enum class` as itself and any other as a byte, which the exporter
+records), class references, structs, and arrays of these. `FText`, soft references, maps,
+sets, delegates or interfaces are left out for now; the generated file lists the functions
+they leave out, with why.
+
+**Core types.** `FVector4`, `FIntPoint`, `FIntVector`, `FColor`, `FBox`, `FMatrix`,
+`FDateTime` and `FTimespan` are declared to Unreal Header Tool apart from their C++
+(NoExport); Ferreal maps them to its own (`Vector4`, `IntPoint`, `IntVector`, `Color`, `Box3`,
+`Matrix`, `DateTime`, `Timespan`), copied through their public C++ members (an `FDateTime`
+through its ticks).
+
+**Class references.** A `TSubclassOf<C>` (or a `UClass*`, of `UObject`) is a
+`ClassOf<C>`: `ClassOf::<engine::Actor>::get()` is `AActor`'s class (found by name), and a
+parameter takes the class of anything that `IsA` its class:
+`GameplayStatics::get_all_actors_of_class(world, ClassOf::<engine::Actor>::get())`.
 
 **Arrays.** A `TArray` parameter takes a slice (`&[&str]` for strings, `&[Obj<C>]` for
 objects), and a returned or output one is a `Vec`. Both are copied element by element: Rust

@@ -111,6 +111,48 @@ public class HelloRust : ModuleRules
 			throw new BuildException("Rust: " + Library + " was not built");
 		}
 		PublicAdditionalLibraries.Add(Library);
+		// Cargo's dep-info, named after the library (ferreal_hello.d, libferreal_hello.d).
+		AddCargoDependencies(Path.ChangeExtension(Library, ".d"), TargetDir, CrateDir);
+	}
+
+	/// <summary>
+	/// Makes Unreal Build Tool run this file (and so cargo) again when anything the library was
+	/// built from changes: the files cargo's dep-info lists (the crate's and its path
+	/// dependencies' sources, ferreal-build's among them, which generates the C++), and the
+	/// workspace's Cargo.lock (other dependencies' versions).
+	/// </summary>
+	private void AddCargoDependencies(string DepInfo, string TargetDir, string CrateDir)
+	{
+		for (DirectoryInfo Dir = new DirectoryInfo(CrateDir); Dir != null; Dir = Dir.Parent)
+		{
+			string Lock = Path.Combine(Dir.FullName, "Cargo.lock");
+			if (File.Exists(Lock))
+			{
+				ExternalDependencies.Add(Lock);
+				break;
+			}
+		}
+		if (!File.Exists(DepInfo))
+		{
+			return;
+		}
+		// `target: a b c`, a space in a path escaped as `\ `.
+		string Text = File.ReadAllText(DepInfo);
+		int Colon = Text.IndexOf(": ", StringComparison.Ordinal);
+		if (Colon < 0)
+		{
+			return;
+		}
+		string Rest = Text.Substring(Colon + 2).Replace("\\ ", "\u0001");
+		foreach (string Part in Rest.Split(new char[] { ' ', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+		{
+			string Dependency = Part.Replace('\u0001', ' ');
+			// What cargo generates under its target folder changes with every build.
+			if (!Dependency.StartsWith(TargetDir, StringComparison.OrdinalIgnoreCase) && File.Exists(Dependency))
+			{
+				ExternalDependencies.Add(Dependency);
+			}
+		}
 	}
 
 	/// <summary>

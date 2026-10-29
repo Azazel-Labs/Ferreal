@@ -48,4 +48,18 @@ namespace Ferreal::HelloRust
 	 * (a slice); a line trace that ignores the actors it is given, and fills an `FHitResult`.
 	 */
 	HELLORUST_API FString Trace(AActor* InActor);
+
+	/**
+	 * `Ferreal::HelloRust::Classes(...)` from C++: class references (`TSubclassOf`, `UClass*`).
+	 * `ClassOf::<C>::get()` is `C`'s class; a function taking a `TSubclassOf<C>` takes the class
+	 * of anything that `IsA<C>`.
+	 */
+	HELLORUST_API FString Classes(AActor* InActor);
+
+	/**
+	 * `Ferreal::HelloRust::CoreTypes()` from C++: core types Unreal Header Tool is told about
+	 * apart from their C++ (`FIntPoint`, `FColor`, `FBox`, `FMatrix`, `FDateTime`, ...), which
+	 * Ferreal maps to its own.
+	 */
+	HELLORUST_API FString CoreTypes();
 }

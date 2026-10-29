@@ -38,6 +38,14 @@ public static class Fixture
 		return p;
 	}
 
+	/// <summary>A class reference: a TSubclassOf (or a UClass*, of UObject).</summary>
+	private static UhtClassProperty ClassRef(string name, UhtClass metaClass, EPropertyFlags flags = EPropertyFlags.None)
+	{
+		UhtClassProperty p = Prop<UhtClassProperty>(name, flags);
+		p.MetaClass = metaClass;
+		return p;
+	}
+
 	private static UhtObjectProperty Object(string name, UhtClass c)
 	{
 		UhtObjectProperty p = Prop<UhtObjectProperty>(name);
@@ -146,6 +154,7 @@ public static class Fixture
 		world.PropertyFlags = EPropertyFlags.ConstParm;
 		UhtClass system = Class("UKismetSystemLibrary", library,
 			Function("GetDisplayName", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(), named),
+			Function("GetClassDisplayName", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(), ClassRef("Class", obj, EPropertyFlags.ConstParm)),
 			// As the engine declares it: an array of objects in, an FHitResult out.
 			Function("LineTraceSingle", Callable | EFunctionFlags.Static, Ret<UhtBoolProperty>(),
 				world, Struct("Start", "FVector", EPropertyFlags.ConstParm), Struct("End", "FVector", EPropertyFlags.ConstParm), channel,
@@ -197,12 +206,31 @@ public static class Fixture
 				Object("PhysMat", physicalMaterial), Object("HitActor", actor), Object("HitComponent", primitive),
 				Prop<UhtNameProperty>("HitBoneName"), Prop<UhtNameProperty>("BoneName"),
 				Prop<UhtIntProperty>("HitItem"), Prop<UhtIntProperty>("ElementIndex"), Prop<UhtIntProperty>("FaceIndex"),
-				Struct("TraceStart", "FVector"), Struct("TraceEnd", "FVector")));
+				Struct("TraceStart", "FVector"), Struct("TraceEnd", "FVector")),
+			// Class references: a UClass* returned, a TSubclassOf<AActor> passed.
+			Function("GetObjectClass", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, ClassRef("ReturnValue", obj), Object("Object", obj)),
+			Function("GetAllActorsOfClass", Callable | EFunctionFlags.Static, null,
+				Object("WorldContextObject", obj), ClassRef("ActorClass", actor), Array("OutActors", Object("OutActors", actor), EPropertyFlags.OutParm)));
 
 		// `UPARAM(ref) FVector& A`: a reference read and changed.
 		UhtClass math = Class("UKismetMathLibrary", library,
 			Function("Vector_Normalize", Callable | EFunctionFlags.Static, null,
-				Struct("A", "FVector", EPropertyFlags.OutParm | EPropertyFlags.ReferenceParm), Prop<UhtFloatProperty>("Tolerance")));
+				Struct("A", "FVector", EPropertyFlags.OutParm | EPropertyFlags.ReferenceParm), Prop<UhtFloatProperty>("Tolerance")),
+			Function("ClassIsChildOf", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtBoolProperty>(),
+				ClassRef("TestClass", obj), ClassRef("ParentClass", obj)),
+			// Core types declared to UHT apart from their C++ (NoExport), which Ferreal maps.
+			Function("Add_IntPointIntPoint", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Struct("ReturnValue", "FIntPoint"), Struct("A", "FIntPoint"), Struct("B", "FIntPoint")),
+			Function("Conv_IntToIntVector", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Struct("ReturnValue", "FIntVector"), Prop<UhtIntProperty>("InInt")),
+			Function("Conv_Vector4ToVector", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Struct("ReturnValue", "FVector"), Struct("InVector4", "FVector4", EPropertyFlags.ConstParm)),
+			Function("Conv_LinearColorToColor", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Struct("ReturnValue", "FColor"), Struct("InLinearColor", "FLinearColor"), Prop<UhtBoolProperty>("InUseSRGB")),
+			Function("MakeBox", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Struct("ReturnValue", "FBox"), Struct("Min", "FVector"), Struct("Max", "FVector")),
+			Function("Matrix_GetOrigin", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Struct("ReturnValue", "FVector"), Struct("InMatrix", "FMatrix", EPropertyFlags.ConstParm)),
+			Function("MakeDateTime", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Struct("ReturnValue", "FDateTime"),
+				Prop<UhtIntProperty>("Year"), Prop<UhtIntProperty>("Month"), Prop<UhtIntProperty>("Day"), Prop<UhtIntProperty>("Hour"),
+				Prop<UhtIntProperty>("Minute"), Prop<UhtIntProperty>("Second"), Prop<UhtIntProperty>("Millisecond")),
+			Function("Add_DateTimeTimespan", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Struct("ReturnValue", "FDateTime"), Struct("A", "FDateTime"), Struct("B", "FTimespan")),
+			Function("GetYear", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtIntProperty>(), Struct("A", "FDateTime")),
+			Function("FromSeconds", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Struct("ReturnValue", "FTimespan"), Prop<UhtDoubleProperty>("Seconds")));
 
 		// A class of the project (Rust's own: not bound).
 		UhtClass greeter = Class("UGreeter", obj, Function("Greet", Callable, Ret<UhtStrProperty>(), Prop<UhtStrProperty>("Punctuation")));
