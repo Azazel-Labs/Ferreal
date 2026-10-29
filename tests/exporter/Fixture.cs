@@ -31,6 +31,13 @@ public static class Fixture
 		return p;
 	}
 
+	private static UhtArrayProperty Array(string name, UhtProperty element, EPropertyFlags flags = EPropertyFlags.None)
+	{
+		UhtArrayProperty p = Prop<UhtArrayProperty>(name, flags);
+		p.ValueProperty = element;
+		return p;
+	}
+
 	private static UhtObjectProperty Object(string name, UhtClass c)
 	{
 		UhtObjectProperty p = Prop<UhtObjectProperty>(name);
@@ -69,7 +76,7 @@ public static class Fixture
 		ubergraph.MetaData["BlueprintInternalUseOnly"] = "true";
 		obj.Functions.Add(ubergraph);
 
-		var collision = new UhtEnum { SourceName = "ECollisionEnabled", EngineName = "ECollisionEnabled", UnderlyingType = UhtEnumUnderlyingType.Int };
+		var collision = new UhtEnum { SourceName = "ECollisionEnabled", EngineName = "ECollisionEnabled", CppForm = UhtEnumCppForm.Namespaced, CppType = "ECollisionEnabled::Type", UnderlyingType = UhtEnumUnderlyingType.Int };
 		collision.MetaData["ToolTip"] = "Enum used to describe what type of collision is enabled on a body.";
 		string[] modes = ["NoCollision", "QueryOnly", "PhysicsOnly", "QueryAndPhysics", "ProbeOnly", "QueryAndProbe"];
 		for (int i = 0; i < modes.Length; ++i)
@@ -87,7 +94,8 @@ public static class Fixture
 			hide,
 			Function("K2_SetActorLocation", Callable, Ret<UhtBoolProperty>(),
 				Struct("NewLocation", "FVector"), Prop<UhtBoolProperty>("bSweep"),
-				Struct("SweepHitResult", "FHitResult", EPropertyFlags.OutParm | EPropertyFlags.ReferenceParm),
+				// `FHitResult& SweepHitResult`: an output.
+				Struct("SweepHitResult", "FHitResult", EPropertyFlags.OutParm),
 				Prop<UhtBoolProperty>("bTeleport")),
 			Function("K2_SetActorRotation", Callable, Ret<UhtBoolProperty>(), Struct("NewRotation", "FRotator"), Prop<UhtBoolProperty>("bTeleportPhysics")),
 			Function("K2_GetActorLocation", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Const, Struct("ReturnValue", "FVector")),
@@ -102,7 +110,7 @@ public static class Fixture
 		UhtClass component = Class("UActorComponent", obj, Function("Activate", Callable, null, Prop<UhtBoolProperty>("bReset")));
 		UhtClass scene = Class("USceneComponent", component,
 			Function("SetVisibility", Callable, null, Prop<UhtBoolProperty>("bNewVisibility"), Prop<UhtBoolProperty>("bPropagateToChildren")));
-		// `namespace ECollisionEnabled { enum Type : int }`, passed as itself (not a TEnumAsByte).
+		// `namespace ECollisionEnabled { enum Type : int }`, passed as itself: a byte all the same.
 		UhtEnumProperty newType = Prop<UhtEnumProperty>("NewType");
 		newType.Enum = collision;
 		UhtEnumProperty current = Prop<UhtEnumProperty>("ReturnValue");
@@ -112,13 +120,38 @@ public static class Fixture
 			Function("GetCollisionEnabled", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Const, current));
 
 		UhtClass library = Class("UBlueprintFunctionLibrary", obj);
+		// Arrays: returned, and passed by const reference (an input, flagged out and ref).
+		const EPropertyFlags ConstRef = EPropertyFlags.OutParm | EPropertyFlags.ConstParm | EPropertyFlags.ReferenceParm;
 		UhtClass strings = Class("UKismetStringLibrary", library,
 			Function("Concat_StrStr", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(), Prop<UhtStrProperty>("A"), Prop<UhtStrProperty>("B")),
-			Function("Conv_IntToString", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(), Prop<UhtIntProperty>("InInt")));
+			Function("Conv_IntToString", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(), Prop<UhtIntProperty>("InInt")),
+			Function("ParseIntoArray", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Array("ReturnValue", Prop<UhtStrProperty>("ReturnValue")),
+				Prop<UhtStrProperty>("SourceString"), Prop<UhtStrProperty>("Delimiter"), Prop<UhtBoolProperty>("CullEmptyStrings", EPropertyFlags.ConstParm)),
+			Function("JoinStringArray", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(),
+				Array("SourceArray", Prop<UhtStrProperty>("SourceArray"), ConstRef), Prop<UhtStrProperty>("Separator")));
 		UhtObjectProperty named = Object("Object", obj);
 		named.PropertyFlags = EPropertyFlags.ConstParm;
+		// `enum ETraceTypeQuery : int` and `namespace EDrawDebugTrace { enum Type : int }`.
+		var traceType = new UhtEnum { SourceName = "ETraceTypeQuery", EngineName = "ETraceTypeQuery", CppForm = UhtEnumCppForm.Regular, CppType = "ETraceTypeQuery", UnderlyingType = UhtEnumUnderlyingType.Int };
+		traceType.EnumValues.Add(new UhtEnumValue { Name = "TraceTypeQuery1", Value = 0 });
+		traceType.EnumValues.Add(new UhtEnumValue { Name = "TraceTypeQuery2", Value = 1 });
+		var drawDebug = new UhtEnum { SourceName = "EDrawDebugTrace", EngineName = "EDrawDebugTrace", CppForm = UhtEnumCppForm.Namespaced, CppType = "EDrawDebugTrace::Type", UnderlyingType = UhtEnumUnderlyingType.Int };
+		drawDebug.EnumValues.Add(new UhtEnumValue { Name = "EDrawDebugTrace::None", Value = 0 });
+		drawDebug.EnumValues.Add(new UhtEnumValue { Name = "EDrawDebugTrace::ForOneFrame", Value = 1 });
+		UhtEnumProperty channel = Prop<UhtEnumProperty>("TraceChannel");
+		channel.Enum = traceType;
+		UhtEnumProperty debugType = Prop<UhtEnumProperty>("DrawDebugType");
+		debugType.Enum = drawDebug;
+		UhtObjectProperty world = Object("WorldContextObject", obj);
+		world.PropertyFlags = EPropertyFlags.ConstParm;
 		UhtClass system = Class("UKismetSystemLibrary", library,
-			Function("GetDisplayName", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(), named));
+			Function("GetDisplayName", Callable | EFunctionFlags.BlueprintPure | EFunctionFlags.Static, Ret<UhtStrProperty>(), named),
+			// As the engine declares it: an array of objects in, an FHitResult out.
+			Function("LineTraceSingle", Callable | EFunctionFlags.Static, Ret<UhtBoolProperty>(),
+				world, Struct("Start", "FVector", EPropertyFlags.ConstParm), Struct("End", "FVector", EPropertyFlags.ConstParm), channel,
+				Prop<UhtBoolProperty>("bTraceComplex"), Array("ActorsToIgnore", Object("ActorsToIgnore", actor), ConstRef), debugType,
+				Struct("OutHit", "FHitResult", EPropertyFlags.OutParm), Prop<UhtBoolProperty>("bIgnoreSelf"),
+				Struct("TraceColor", "FLinearColor"), Struct("TraceHitColor", "FLinearColor"), Prop<UhtFloatProperty>("DrawTime")));
 
 		// Structs: FVector is a core type, declared to UHT apart from its C++ (NoExport); its
 		// network form adds no field; FHitResult's fields are of every kind Ferreal copies, and
@@ -166,6 +199,11 @@ public static class Fixture
 				Prop<UhtIntProperty>("HitItem"), Prop<UhtIntProperty>("ElementIndex"), Prop<UhtIntProperty>("FaceIndex"),
 				Struct("TraceStart", "FVector"), Struct("TraceEnd", "FVector")));
 
+		// `UPARAM(ref) FVector& A`: a reference read and changed.
+		UhtClass math = Class("UKismetMathLibrary", library,
+			Function("Vector_Normalize", Callable | EFunctionFlags.Static, null,
+				Struct("A", "FVector", EPropertyFlags.OutParm | EPropertyFlags.ReferenceParm), Prop<UhtFloatProperty>("Tolerance")));
+
 		// A class of the project (Rust's own: not bound).
 		UhtClass greeter = Class("UGreeter", obj, Function("Greet", Callable, Ret<UhtStrProperty>(), Prop<UhtStrProperty>("Punctuation")));
 
@@ -186,10 +224,11 @@ public static class Fixture
 				Header("Components/ActorComponent.h", component),
 				Header("Components/SceneComponent.h", scene),
 				Header("Components/PrimitiveComponent.h", primitive),
-				Header("Engine/EngineTypes.h", collision),
+				Header("Engine/EngineTypes.h", collision, traceType),
 				Header("Kismet/BlueprintFunctionLibrary.h", library),
 				Header("Kismet/KismetStringLibrary.h", strings),
-				Header("Kismet/KismetSystemLibrary.h", system),
+				Header("Kismet/KismetSystemLibrary.h", drawDebug, system),
+				Header("Kismet/KismetMathLibrary.h", math),
 				Header("Engine/NetSerialization.h", netQuantize),
 				Header("Engine/ActorInstanceHandle.h", handle),
 				Header("Engine/HitResult.h", hit),

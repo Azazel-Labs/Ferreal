@@ -14,6 +14,7 @@ ferreal::engine!(
     UPrimitiveComponent,
     UKismetStringLibrary,
     UKismetSystemLibrary,
+    UKismetMathLibrary,
     UGameplayStatics
 );
 
@@ -198,8 +199,9 @@ pub fn poke(actor: Obj<engine::Actor>, component: Obj<engine::PrimitiveComponent
     };
 
     actor.set_actor_hidden_in_game(true);
-    actor.set_owner(Some(actor));
-    let own = actor.get_owner() == Some(actor);
+    // No owner (an actor cannot own itself).
+    actor.set_owner(None::<Obj<engine::Actor>>);
+    let own = actor.get_owner().is_none();
     let turned = actor.set_actor_rotation(Rotator::new(10.0, 20.0, 30.0), false);
     let at = actor.get_actor_location();
     let tagged = actor.actor_has_tag("Rusty");
@@ -255,8 +257,8 @@ pub fn hit(actor: Obj<engine::Actor>, component: Obj<engine::PrimitiveComponent>
         None::<Obj<PhysicalMaterial>>,
         Some(actor),
         Some(component),
-        "",
         "Spine",
+        "",
         0,
         0,
         0,
@@ -275,13 +277,17 @@ pub fn hit(actor: Obj<engine::Actor>, component: Obj<engine::PrimitiveComponent>
         return FTransform(transform.GetRotation(), FVector(At.X, At.Y, At.Z + 10), transform.GetScale3D());
     });
     let mode = engine::CollisionEnabled::QUERY_ONLY;
-    let next = cpp!([mode: engine::CollisionEnabled] -> i32 { return mode + 1; });
+    // An engine enum is its own C++ type in the block (`ECollisionEnabled::Type`).
+    let next = cpp!([mode: engine::CollisionEnabled] -> i32 {
+        return mode == ECollisionEnabled::QueryOnly ? 2 : 0;
+    });
     format!(
-        "blocking={} time={} z={} component={} bone={} scale={} turn={} later={} {} moved={} next={}",
+        "blocking={} time={} z={} component={} actor={} bone={} scale={} turn={} later={} {} moved={} next={}",
         hit.blocking_hit,
         hit.time,
         hit.location.z,
         hit.component == Some(component),
+        hit.hit_object_handle == Some(actor) && later.hit_object_handle == Some(actor),
         hit.bone_name,
         transform.scale.x,
         transform.rotation.z,
@@ -289,5 +295,55 @@ pub fn hit(actor: Obj<engine::Actor>, component: Obj<engine::PrimitiveComponent>
         later.bone_name,
         moved.translation.z,
         next
+    )
+}
+
+/// `Ferreal::HelloRust::Sweep(...)` from C++: output parameters. The engine fills
+/// `FHitResult& SweepHitResult`, which Rust gets back with the return value; it reads and
+/// changes `UPARAM(ref) FVector& A`, a `&mut` in Rust.
+#[export]
+pub fn sweep(actor: Obj<engine::Actor>) -> String {
+    use engine::{ActorApi, KismetMathLibrary};
+
+    let (moved, swept) = actor.set_actor_location(Vector3::new(0.0, 0.0, 7.0), true, false);
+    let mut direction = Vector3::new(3.0, 0.0, 4.0);
+    KismetMathLibrary::vector_normalize(&mut direction, 0.0001);
+    format!(
+        "moved={moved} swept={} actor={} x={:.3}",
+        swept.time,
+        swept.hit_object_handle == Some(actor),
+        direction.x
+    )
+}
+
+/// `Ferreal::HelloRust::Trace(...)` from C++: arrays. Strings returned (a `Vec`) and passed
+/// (a slice); a line trace that ignores the actors it is given, and fills an `FHitResult`.
+#[export]
+pub fn trace(actor: Obj<engine::Actor>) -> String {
+    use engine::{DrawDebugTrace, KismetStringLibrary, KismetSystemLibrary, TraceTypeQuery};
+
+    let parts = KismetStringLibrary::parse_into_array("a,b,,c", ",", true);
+    let joined = KismetStringLibrary::join_string_array(&["x", "y"], "+");
+    let line = |ignore: &[Obj<engine::Actor>]| {
+        KismetSystemLibrary::line_trace_single(
+            Some(actor),
+            Vector3::ZERO,
+            Vector3::new(0.0, 0.0, -100.0),
+            TraceTypeQuery::TRACE_TYPE_QUERY1,
+            false,
+            ignore,
+            DrawDebugTrace::NONE,
+            false,
+            LinearColor::new(1.0, 0.0, 0.0, 1.0),
+            LinearColor::new(0.0, 1.0, 0.0, 1.0),
+            0.0,
+        )
+    };
+    let (hit, result) = line(&[]);
+    let (ignored, _) = line(&[actor]);
+    format!(
+        "parts={parts:?} joined={joined} hit={hit} z={} actor={} ignored={ignored}",
+        result.location.z,
+        result.hit_object_handle == Some(actor)
     )
 }

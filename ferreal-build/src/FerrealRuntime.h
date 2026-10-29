@@ -219,6 +219,37 @@ namespace Ferreal
 		return TSlice<T>{A.GetData(), static_cast<size_t>(A.Num())};
 	}
 
+	/** Where Rust receives an array's elements (ferreal::ffi::Sink): each pushed carrier is copied at once. */
+	struct FSink
+	{
+		void* Ctx;
+		void (*Push)(void*, const void*);
+	};
+
+	/** Hands each element of Array to Rust, as the carrier ToCarrier makes of it. */
+	template <typename A, typename F>
+	void PushAll(const FSink& Sink, const A& Array, F ToCarrier)
+	{
+		for (const auto& E : Array)
+		{
+			const auto C = ToCarrier(E);
+			Sink.Push(Sink.Ctx, &C);
+		}
+	}
+
+	/** An array from Rust, each carrier made a T by FromCarrier. */
+	template <typename T, typename C, typename F>
+	TArray<T> ArrayFrom(TSlice<C> S, F FromCarrier)
+	{
+		TArray<T> Out;
+		Out.Reserve(static_cast<int32>(S.Len));
+		for (size_t I = 0; I < S.Len; ++I)
+		{
+			Out.Add(FromCarrier(S.Ptr[I]));
+		}
+		return Out;
+	}
+
 	/** An array from Rust, copied. */
 	template <typename T>
 	TArray<T> ToArray(TSlice<T> S)

@@ -113,17 +113,29 @@ namespace Ferreal
 
 		static bool PropertyMatches(const FProperty* Prop, const FEngineParam& P)
 		{
-			const FString Actual = Prop->GetClass()->GetName();
+			return PropertyMatches(Prop, FString(P.Property), P.Struct);
+		}
+
+		/** Property: the accepted property classes, `|` between; `ArrayProperty/<the element's>` for an array. */
+		static bool PropertyMatches(const FProperty* Prop, const FString& Property, const TCHAR* Struct)
+		{
+			FString Outer = Property;
+			FString Inner;
+			if (Property.Split(TEXT("/"), &Outer, &Inner))
+			{
+				const FArrayProperty* Array = CastField<FArrayProperty>(Prop);
+				return Outer == TEXT("ArrayProperty") && Array && Array->Inner && PropertyMatches(Array->Inner, Inner, Struct);
+			}
 			TArray<FString> Accepted;
-			FString(P.Property).ParseIntoArray(Accepted, TEXT("|"));
-			if (!Accepted.Contains(Actual))
+			Outer.ParseIntoArray(Accepted, TEXT("|"));
+			if (!Accepted.Contains(Prop->GetClass()->GetName()))
 			{
 				return false;
 			}
-			if (P.Struct)
+			if (Struct)
 			{
 				const FStructProperty* S = CastField<FStructProperty>(Prop);
-				return S && S->Struct && S->Struct->GetName() == P.Struct;
+				return S && S->Struct && S->Struct->GetName() == Struct;
 			}
 			return true;
 		}

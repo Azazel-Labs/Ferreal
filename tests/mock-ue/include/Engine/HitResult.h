@@ -1,6 +1,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "Components/PrimitiveComponent.h"
+#include "Engine/ActorInstanceHandle.h"
 
 /** As the engine's: an FVector for the network, adding no field. */
 struct FVector_NetQuantize : public FVector
@@ -9,7 +10,7 @@ struct FVector_NetQuantize : public FVector
 	FVector_NetQuantize(const FVector& V) : FVector(V) {}
 };
 
-/** As the engine's, in part (a bit field, a weak pointer, a field that is not public). */
+/** As the engine's, in part (a bit field, a weak pointer, a field that is not public, the handle of the actor hit). */
 struct FHitResult
 {
 	FHitResult() : bBlockingHit(false) {}
@@ -20,6 +21,7 @@ struct FHitResult
 	FName BoneName;
 	float EditorOnlyTime = 0.0f;
 	int32 Fixed[2] = {0, 0};
+	FActorInstanceHandle HitObjectHandle;
 	int32 GetFaceIndex() const { return FaceIndex; }
 private:
 	int32 FaceIndex = -1;

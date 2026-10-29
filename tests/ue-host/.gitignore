@@ -1,2 +1,4 @@
 # Links to unreal/Ferreal and examples/hello, made by cargo xtask ue.
 Plugins/
+# Defaults the editor writes when it runs (cargo xtask ue --test).
+Config/

@@ -11,3 +11,10 @@ Saved/
 DerivedDataCache/
 .vs/
 *.sln
+
+# Written by a module's Build.cs while cargo fails.
+FerrealCargoFailed.cpp
+
+# A crate's lock of the engine's reflection data: written from the engine of whoever builds
+# (the tests use the mock engine's, tests/mock-ue/FerrealEngine.json).
+ferreal-engine.json

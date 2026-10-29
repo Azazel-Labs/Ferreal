@@ -675,7 +675,7 @@ impl<'a> Gen<'a> {
         }
         includes.extend(self.model.cpp_includes.iter().map(|i| i.item.clone()));
         // The structs the engine bindings copy.
-        includes.extend(self.engine.struct_headers().map(str::to_string));
+        includes.extend(self.engine.headers().map(str::to_string));
         for i in &includes {
             let _ = writeln!(o, "#include \"{i}\"");
         }

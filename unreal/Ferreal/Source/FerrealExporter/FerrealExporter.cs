@@ -47,7 +47,7 @@ public static class FerrealExporter
 			json.WriteString("format", "ferreal-engine");
 			json.WriteNumber("version", FormatVersion);
 
-			var enums = new List<(UhtEnum Enum, string Module)>();
+			var enums = new List<(UhtEnum Enum, string Module, UhtHeaderFile Header)>();
 			var structs = new List<(UhtScriptStruct Struct, string Module, UhtHeaderFile Header)>();
 			json.WriteStartArray("classes");
 			foreach (UhtModule module in factory.Session.Modules)
@@ -62,7 +62,7 @@ public static class FerrealExporter
 								WriteClass(json, c, module.ShortName, header);
 								break;
 							case UhtEnum e:
-								enums.Add((e, module.ShortName));
+								enums.Add((e, module.ShortName, header));
 								break;
 							case UhtScriptStruct s:
 								structs.Add((s, module.ShortName, header));
@@ -81,9 +81,9 @@ public static class FerrealExporter
 			json.WriteEndArray();
 
 			json.WriteStartArray("enums");
-			foreach ((UhtEnum e, string module) in enums)
+			foreach ((UhtEnum e, string module, UhtHeaderFile header) in enums)
 			{
-				WriteEnum(json, e, module);
+				WriteEnum(json, e, module, header);
 			}
 			json.WriteEndArray();
 
@@ -300,7 +300,9 @@ public static class FerrealExporter
 				Kind(json, "text", "TextProperty");
 				break;
 			case UhtEnumProperty e:
-				Kind(json, "enum", "EnumProperty");
+				// An EnumProperty for an enum class; a ByteProperty (as TEnumAsByte) for an old
+				// namespaced or plain enum, whatever its declared type.
+				Kind(json, "enum", e.EngineClassName);
 				json.WriteString("enum", e.Enum.SourceName);
 				break;
 			case UhtStructProperty s:
@@ -350,11 +352,24 @@ public static class FerrealExporter
 		json.WriteString("property", property);
 	}
 
-	private static void WriteEnum(Utf8JsonWriter json, UhtEnum e, string module)
+	/// <summary>
+	/// An enum: its form, which decides how C++ names it (`ECollisionEnabled::Type` for an old
+	/// namespaced one) and how reflection holds it (an enum class as itself, any other as a
+	/// byte), and its values.
+	/// </summary>
+	private static void WriteEnum(Utf8JsonWriter json, UhtEnum e, string module, UhtHeaderFile header)
 	{
 		json.WriteStartObject();
 		json.WriteString("cpp", e.SourceName);
 		json.WriteString("path", $"/Script/{module}.{e.EngineName}");
+		WriteHeader(json, header);
+		json.WriteString("form", e.CppForm switch
+		{
+			UhtEnumCppForm.EnumClass => "enum_class",
+			UhtEnumCppForm.Namespaced => "namespaced",
+			_ => "regular",
+		});
+		json.WriteString("type", e.FullyQualifiedCppType);
 		json.WriteString("underlying", e.UnderlyingType switch
 		{
 			UhtEnumUnderlyingType.Uint8 => "uint8",

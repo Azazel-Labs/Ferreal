@@ -214,10 +214,16 @@ signatures mention get markers, so they can be passed and returned; name them to
 exporter for Unreal Header Tool: during every Unreal build it writes the reflection data of
 every class and enum UHT parsed (engine, project, plugins) to `FerrealEngine.json`. The
 Build.cs template finds it and passes it to cargo (`FERREAL_ENGINE_METADATA`). The part a
-crate uses is kept next to its `Cargo.toml` in `ferreal-engine.json`: commit it, and a fresh
-checkout (or a build machine outside Unreal) builds without the export. Naming a class not
+crate uses is kept next to its `Cargo.toml` in `ferreal-engine.json`, a snapshot of the engine
+it was built with: a project can commit it, so a build machine outside Unreal builds without
+the export (this repository does not: its example is tested against the mock engine's data,
+and against whichever engine `cargo xtask ue` builds with). Naming a class not
 exported yet takes one more build: the first exports it (the template reports this and lets
-the build go on), the next generates its bindings.
+the build go on), the next generates its bindings. So does calling a `UFUNCTION` added to C++
+in the same change: cargo fails against the old data, and the template, rather than stop the
+build there, prints cargo's errors and lets Unreal Header Tool export the new data, failing
+the build later (a `FerrealCargoFailed.cpp` it writes holds an `#error`, and deletes once
+cargo succeeds). The next build has the data.
 
 **How calls are made.** Each call goes through a generated C++ thunk that fills a struct of
 the function's parameters, laid out by the C++ compiler, and calls `ProcessEvent`, as
@@ -242,9 +248,21 @@ it too.
 
 Parameters: the types above, `FName` (as `&str`/`String`), `FRotator`, `FQuat` and
 `FTransform` (`Rotator`, `Quat`, `Transform`), enums (as `TEnumAsByte` or as themselves), and
-structs. Functions with output parameters (non-const references), arrays, `FText`, class
-references, soft references, delegates or interfaces are left out for now; the generated
-file lists them with why.
+structs, and arrays of these. `FText`, class references (`TSubclassOf`), soft references,
+maps, sets, delegates or interfaces are left out for now; the generated file lists the
+functions they leave out, with why.
+
+**Arrays.** A `TArray` parameter takes a slice (`&[&str]` for strings, `&[Obj<C>]` for
+objects), and a returned or output one is a `Vec`. Both are copied element by element: Rust
+hands C++ a slice of carriers it builds the `TArray` from, and C++ hands each element of a
+`TArray` it returns to Rust, which copies it at once, so arrays of any length (and of strings
+or structs) never outlive their storage. Arrays as struct fields are left out for now.
+
+**Outputs.** A reference the function fills (`FHitResult& OutHit`) is returned, after the
+return value: `actor.set_actor_location(at, true, false)` returns `(bool, HitResult)`, and
+each function's documentation names the values in order. A reference it reads and changes
+(`UPARAM(ref) FVector& A`) is a `&mut`: `KismetMathLibrary::vector_normalize(&mut v, 1e-4)`.
+Const references are plain inputs.
 
 **Structs.** A struct a bound function passes (`FHitResult`) becomes a Rust struct in the
 `engine` module (`engine::HitResult`) holding a copy of its reflected fields: numbers,
@@ -256,7 +274,9 @@ passed), so no Rust ever points into C++ memory or depends on a struct's layout.
 are not public, editor-only, deprecated or fixed-size arrays are left out (their struct's
 documentation lists them; passed to C++, they keep their defaults), as are core types whose
 C++ differs from what Unreal Header Tool is told (NoExport), except the math types Ferreal
-maps itself.
+maps itself. An `FActorInstanceHandle` (`FHitResult::HitObjectHandle`, whose one field is
+private) is copied as its actor, an `Option<Obj<Actor>>`, as `FHitResult::GetActor` returns
+it.
 
 ## Setting up a module
 
@@ -300,12 +320,20 @@ These check the glue's C++, its ABI, and the exporter's logic, not Unreal's own 
 (Unreal Header Tool, Unreal Build Tool, UHT's real API), which only a real engine build
 exercises.
 
+## Testing in Unreal
+
+`cargo xtask ue [--engine <dir>]` builds [tests/ue-host](tests/ue-host), a project whose
+`Plugins` link to the Ferreal plugin and the example, with the engine's own tools (the engine:
+`--engine`, else `UE_ROOT`, else the launcher's default 5.8). With `--test`, it then runs the
+host's automation test ([FerrealHostTest.cpp](tests/ue-host/Source/FerrealHost/FerrealHostTest.cpp))
+in a headless editor: the Rust class, and the example's engine calls, structs, outputs, arrays
+and `cpp!` blocks, on an actor in a real world. A call Ferreal refuses logs an error, which
+fails the test.
+
 ## Limitations
 
-* Ferreal has not yet been through a real Unreal build: the generated code follows UE 5.x
-  conventions and passes the mock test, and the first engine build may need small fixes.
-  The exporter compiles against a stand-in of UHT's API, so a real build may also find
-  names to adjust there.
+* Built and tested with Unreal 5.8's editor on Win64 (`cargo xtask ue --test`); not yet in a
+  packaged game, nor with other engine versions or platforms.
 * Engine bindings go through `ProcessEvent`: a lookup and a check per call on top of the
   function, fine for gameplay calls, not for per-element work in a hot loop (write that in a
   `#[cpp_base]` method, or in Rust).
@@ -313,7 +341,8 @@ exercises.
   the linker reports duplicate symbols. Until Ferreal links one shared Rust library per
   binary, put Rust in one module per game (editor builds, one DLL per module, are fine).
 * No hot reload or Live Coding of Rust: rebuild the module.
-* Structs (`USTRUCT`), delegates, interfaces and maps are not types yet; pass their parts, or
-  wrap them in your C++ base class.
+* A `#[uclass]` cannot declare struct (`USTRUCT`), delegate, interface or map properties yet,
+  and engine structs are copies, not references: pass their parts, or wrap them in your C++
+  base class.
 * Consoles need their platform's Rust target, which the platform holders' SDKs do not provide
   publicly (see the Build.cs: add the triple once you have one).

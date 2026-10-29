@@ -8,6 +8,13 @@
 			"label": "cargo build",
 			"type": "shell",
 			"command": "cargo build --workspace",
+			"options": {
+				"env": {
+					"FERREAL_ENGINE_METADATA": "${workspaceFolder}/tests/mock-ue/FerrealEngine.json",
+					"FERREAL_ENGINE_LOCK": "${workspaceFolder}/target/mock-ue-glue/ferreal-engine.json",
+					"FERREAL_OUTPUT": "${workspaceFolder}/target/mock-ue-glue"
+				}
+			},
 			"group": { "kind": "build", "isDefault": true },
 			"problemMatcher": ["$rustc"]
 		},
@@ -15,14 +22,28 @@
 			"label": "cargo check",
 			"type": "shell",
 			"command": "cargo check --workspace --all-targets",
+			"options": {
+				"env": {
+					"FERREAL_ENGINE_METADATA": "${workspaceFolder}/tests/mock-ue/FerrealEngine.json",
+					"FERREAL_ENGINE_LOCK": "${workspaceFolder}/target/mock-ue-glue/ferreal-engine.json",
+					"FERREAL_OUTPUT": "${workspaceFolder}/target/mock-ue-glue"
+				}
+			},
 			"group": "build",
 			"problemMatcher": ["$rustc"]
 		},
 		{
 			"label": "cargo build (unreal profile)",
-			"detail": "The profile Unreal builds use: release, with unwinding",
+			"detail": "The profile Unreal builds use: release, with unwinding (against the mock engine's data, as cargo build)",
 			"type": "shell",
 			"command": "cargo build --workspace --profile unreal",
+			"options": {
+				"env": {
+					"FERREAL_ENGINE_METADATA": "${workspaceFolder}/tests/mock-ue/FerrealEngine.json",
+					"FERREAL_ENGINE_LOCK": "${workspaceFolder}/target/mock-ue-glue/ferreal-engine.json",
+					"FERREAL_OUTPUT": "${workspaceFolder}/target/mock-ue-glue"
+				}
+			},
 			"group": "build",
 			"problemMatcher": ["$rustc"]
 		},

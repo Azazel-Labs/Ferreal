@@ -59,6 +59,14 @@ public:
 	bool operator==(const TCHAR* O) const { return Str == O; }
 	bool operator!=(const TCHAR* O) const { return Str != O; }
 	inline int32 ParseIntoArray(TArray<FString>& Out, const TCHAR* Delim) const;
+	bool Split(const FString& At, FString* Left, FString* Right) const
+	{
+		const size_t Found = Str.find(At.Str);
+		if (Found == std::u16string::npos) return false;
+		*Left = FString(Str.substr(0, Found));
+		*Right = FString(Str.substr(Found + At.Str.size()));
+		return true;
+	}
 
 	/** printf with %s (TCHAR strings) and %d, as far as the glue uses it. */
 	template <typename... A>
@@ -337,6 +345,15 @@ public:
 	FStructProperty(std::string InName, UScriptStruct* InStruct, int32 InSize, int32 InAlign, uint64 InFlags)
 		: FProperty(std::move(InName), "StructProperty", InSize, InAlign, InFlags), Struct(InStruct) {}
 	UScriptStruct* Struct;
+};
+
+class FArrayProperty : public FProperty
+{
+public:
+	FArrayProperty(std::string InName, FProperty* InInner, int32 InSize, int32 InAlign, uint64 InFlags)
+		: FProperty(std::move(InName), "ArrayProperty", InSize, InAlign, InFlags), Inner(InInner) {}
+	~FArrayProperty() override { delete Inner; }
+	FProperty* Inner;
 };
 
 template <typename T> T* CastField(FProperty* P) { return dynamic_cast<T*>(P); }

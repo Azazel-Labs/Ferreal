@@ -75,13 +75,27 @@ public class HelloRust : ModuleRules
 		{
 			ExternalDependencies.Add(Metadata ?? FirstExport);
 		}
+		// Unreal Build Tool caches what it learns from this file: these make it run the file
+		// (and so cargo) again when the Rust changes.
+		ExternalDependencies.Add(Path.Combine(CrateDir, "Cargo.toml"));
+		ExternalDependencies.Add(Path.Combine(CrateDir, "build.rs"));
+		foreach (string Source in Directory.EnumerateFiles(Path.Combine(CrateDir, "src"), "*.rs", SearchOption.AllDirectories))
+		{
+			ExternalDependencies.Add(Source);
+		}
+
 		if (Environment.GetEnvironmentVariable("FERREAL_SKIP_CARGO") != "1")
 		{
-			bool bNeedsMetadata = RunCargo(CrateDir, string.Format(
+			CargoResult Result = RunCargo(CrateDir, string.Format(
 				"build --manifest-path \"{0}\" --lib --profile {1} --target {2} --target-dir \"{3}\"",
 				Path.Combine(CrateDir, "Cargo.toml"), Profile, Triple, TargetDir), Metadata);
+			ReportFailure(Result == CargoResult.Failed);
 			ForgetGenerated();
-			if (bNeedsMetadata)
+			if (Result == CargoResult.Failed)
+			{
+				return;
+			}
+			if (Result == CargoResult.NeedsMetadata)
 			{
 				// The first build with new engine classes: this build exports their reflection
 				// data, the next one generates their bindings and links the Rust.
@@ -97,14 +111,26 @@ public class HelloRust : ModuleRules
 			throw new BuildException("Rust: " + Library + " was not built");
 		}
 		PublicAdditionalLibraries.Add(Library);
+	}
 
-		// Unreal Build Tool caches what it learns from this file: these make it run the file
-		// (and so cargo) again when the Rust changes.
-		ExternalDependencies.Add(Path.Combine(CrateDir, "Cargo.toml"));
-		ExternalDependencies.Add(Path.Combine(CrateDir, "build.rs"));
-		foreach (string Source in Directory.EnumerateFiles(Path.Combine(CrateDir, "src"), "*.rs", SearchOption.AllDirectories))
+	/// <summary>
+	/// When cargo failed, writes a source file that fails the build (Private/Ferreal/
+	/// FerrealCargoFailed.cpp) rather than stopping it here: Unreal Header Tool runs first, so
+	/// the reflection data is exported all the same. The Rust may fail because that data is old
+	/// (a UFUNCTION added to C++ with the Rust that calls it), and would otherwise never get the
+	/// new data. Deletes the file once cargo succeeds.
+	/// </summary>
+	private void ReportFailure(bool bFailed)
+	{
+		string Failed = Path.Combine(ModuleDirectory, "Private", "Ferreal", "FerrealCargoFailed.cpp");
+		if (bFailed)
 		{
-			ExternalDependencies.Add(Source);
+			Directory.CreateDirectory(Path.GetDirectoryName(Failed));
+			File.WriteAllText(Failed, "// Written by the module's Build.cs: cargo failed. Deleted once it succeeds.\n#error \"Rust: cargo failed (its errors are above). If the Rust calls functions new to the C++, build again: this build exported them.\"\n");
+		}
+		else if (File.Exists(Failed))
+		{
+			File.Delete(Failed);
 		}
 	}
 
@@ -204,12 +230,19 @@ public class HelloRust : ModuleRules
 		return Newest;
 	}
 
+	private enum CargoResult
+	{
+		Built,
+		/// <summary>The crate needs reflection data Unreal has not exported yet.</summary>
+		NeedsMetadata,
+		Failed,
+	}
+
 	/// <summary>
-	/// Runs cargo with Arguments (and the engine's reflection data at Metadata, if any).
-	/// Returns true when the build needs reflection data Unreal has not exported yet;
-	/// throws on other failures.
+	/// Runs cargo with Arguments (and the engine's reflection data at Metadata, if any),
+	/// writing its errors to the build's output when it fails.
 	/// </summary>
-	private static bool RunCargo(string WorkingDirectory, string Arguments, string Metadata)
+	private static CargoResult RunCargo(string WorkingDirectory, string Arguments, string Metadata)
 	{
 		ProcessStartInfo Start = new ProcessStartInfo("cargo", Arguments)
 		{
@@ -239,14 +272,15 @@ public class HelloRust : ModuleRules
 		Cargo.WaitForExit();
 		if (Cargo.ExitCode == 0)
 		{
-			return false;
+			return CargoResult.Built;
 		}
 		if (Errors.Contains("FERREAL_NEEDS_ENGINE_METADATA"))
 		{
 			Console.WriteLine(Errors);
-			return true;
+			return CargoResult.NeedsMetadata;
 		}
-		throw new BuildException("Rust: cargo failed:\n" + Output.Result + Errors);
+		Console.WriteLine("Rust: cargo failed:\n" + Output.Result + Errors);
+		return CargoResult.Failed;
 	}
 
 	#endregion

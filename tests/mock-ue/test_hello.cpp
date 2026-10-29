@@ -44,6 +44,19 @@ static FProperty* Return(const char* Class, int32 Size, int32 Align)
 	return new FProperty("ReturnValue", Class, Size, Align, CPF_Parm | CPF_ReturnParm);
 }
 
+/** A TArray<T> parameter whose elements are Inner (`flags`: CPF_ReturnParm for the return value). */
+template <typename T>
+static FProperty* ArrayParam(const char* Name, FProperty* Inner, uint64 Flags = 0)
+{
+	return new FArrayProperty(Name, Inner, sizeof(TArray<T>), alignof(TArray<T>), CPF_Parm | Flags);
+}
+
+template <typename T>
+static FProperty* OutParam(const char* Name, UScriptStruct* Struct)
+{
+	return new FStructProperty(Name, Struct, sizeof(T), alignof(T), CPF_Parm | CPF_OutParm);
+}
+
 template <typename T>
 static FProperty* StructParam(const char* Name, UScriptStruct* Struct, bool bReturn = false)
 {
@@ -70,6 +83,7 @@ struct FMockEngine
 	UScriptStruct Rotator{"Rotator"};
 	UScriptStruct HitResult{"HitResult"};
 	UScriptStruct Transform{"Transform"};
+	UScriptStruct LinearColor{"LinearColor"};
 	UClass Object{"Object", nullptr};
 	UClass Actor{"Actor", &Object};
 	UClass ActorComponent{"ActorComponent", &Object};
@@ -82,6 +96,8 @@ struct FMockEngine
 	UObject SystemDefault;
 	UClass Statics{"GameplayStatics", &Library};
 	UObject StaticsDefault;
+	UClass Math{"KismetMathLibrary", &Library};
+	UObject MathDefault;
 
 	FMockEngine()
 	{
@@ -100,14 +116,27 @@ struct FMockEngine
 		FerrealMockClasses()[u"/Script/Engine.GameplayStatics"] = &Statics;
 		StaticsDefault.MockClass = &Statics;
 		Statics.DefaultObject = &StaticsDefault;
+		FerrealMockClasses()[u"/Script/Engine.KismetMathLibrary"] = &Math;
+		MathDefault.MockClass = &Math;
+		Math.DefaultObject = &MathDefault;
 
 		const int32 Str = sizeof(FString), StrAlign = alignof(FString);
 		const int32 Ptr = sizeof(UObject*);
 		AddFunction(Actor, "SetActorHiddenInGame", {Param("bNewHidden", "BoolProperty", 1, 1)},
 			[](UFunction& F, UObject*, uint8* P) { State.bHidden = F.Param<bool>(P, 0); });
+		// An output (FHitResult& SweepHitResult), filled when sweeping.
 		AddFunction(Actor, "K2_SetActorLocation",
-			{StructParam<FVector>("NewLocation", &Vector), Param("bSweep", "BoolProperty", 1, 1), StructParam<FVector>("SweepHitResult", &HitResult), Param("bTeleport", "BoolProperty", 1, 1), Return("BoolProperty", 1, 1)},
-			[](UFunction&, UObject*, uint8*) {});
+			{StructParam<FVector>("NewLocation", &Vector), Param("bSweep", "BoolProperty", 1, 1), OutParam<FHitResult>("SweepHitResult", &HitResult), Param("bTeleport", "BoolProperty", 1, 1), Return("BoolProperty", 1, 1)},
+			[](UFunction& F, UObject* Self, uint8* P)
+			{
+				if (F.Param<bool>(P, 1))
+				{
+					FHitResult& Hit = F.Param<FHitResult>(P, 2);
+					Hit.Time = 0.25f;
+					Hit.HitObjectHandle = FActorInstanceHandle(static_cast<AActor*>(Self));
+				}
+				F.Param<bool>(P, 4) = true;
+			});
 		AddFunction(Actor, "K2_SetActorRotation",
 			{StructParam<FRotator>("NewRotation", &Rotator), Param("bTeleportPhysics", "BoolProperty", 1, 1), Return("BoolProperty", 1, 1)},
 			[](UFunction& F, UObject*, uint8* P) { State.Rotation = F.Param<FRotator>(P, 0); F.Param<bool>(P, 2) = !F.Param<bool>(P, 1); });
@@ -125,11 +154,12 @@ struct FMockEngine
 		AddFunction(ActorComponent, "Activate", {Param("bReset", "BoolProperty", 1, 1)}, [](UFunction&, UObject*, uint8*) {});
 		AddFunction(SceneComponent, "SetVisibility", {Param("bNewVisibility", "BoolProperty", 1, 1), Param("bPropagateToChildren", "BoolProperty", 1, 1)},
 			[](UFunction& F, UObject*, uint8* P) { State.bVisible = F.Param<bool>(P, 0); State.bPropagate = F.Param<bool>(P, 1); });
-		// ECollisionEnabled::Type is an `enum Type : int` passed as itself: an EnumProperty of 4 bytes.
-		AddFunction(PrimitiveComponent, "SetCollisionEnabled", {Param("NewType", "EnumProperty", 4, 4)},
-			[](UFunction& F, UObject*, uint8* P) { State.Collision = F.Param<int32>(P, 0); });
-		AddFunction(PrimitiveComponent, "GetCollisionEnabled", {Return("EnumProperty", 4, 4)},
-			[](UFunction& F, UObject*, uint8* P) { F.Param<int32>(P, 0) = State.Collision; });
+		// ECollisionEnabled::Type is an `enum Type : int` passed as itself, which reflection
+		// holds in a byte (only an enum class is an EnumProperty).
+		AddFunction(PrimitiveComponent, "SetCollisionEnabled", {Param("NewType", "ByteProperty", 1, 1)},
+			[](UFunction& F, UObject*, uint8* P) { State.Collision = F.Param<uint8>(P, 0); });
+		AddFunction(PrimitiveComponent, "GetCollisionEnabled", {Return("ByteProperty", 1, 1)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<uint8>(P, 0) = static_cast<uint8>(State.Collision); });
 		AddFunction(Strings, "Concat_StrStr", {Param("A", "StrProperty", Str, StrAlign), Param("B", "StrProperty", Str, StrAlign), Return("StrProperty", Str, StrAlign)},
 			[](UFunction& F, UObject* Self, uint8* P) { F.Param<FString>(P, 2) = FString(F.Param<FString>(P, 0).Str + F.Param<FString>(P, 1).Str); (void)Self; });
 		AddFunction(Strings, "Conv_IntToString", {Param("InInt", "IntProperty", 4, 4), Return("StrProperty", Str, StrAlign)},
@@ -152,7 +182,51 @@ struct FMockEngine
 				Hit.Time = F.Param<float>(P, 2);
 				Hit.Location = F.Param<FVector>(P, 4);
 				Hit.Component = Cast<UPrimitiveComponent>(F.Param<UObject*>(P, 10));
-				Hit.BoneName = F.Param<FName>(P, 12);
+				Hit.BoneName = F.Param<FName>(P, 11);
+				Hit.HitObjectHandle = FActorInstanceHandle(Cast<AActor>(F.Param<UObject*>(P, 9)));
+			});
+		// A reference read and changed (UPARAM(ref) FVector& A).
+		AddFunction(Math, "Vector_Normalize", {OutParam<FVector>("A", &Vector), Param("Tolerance", "FloatProperty", 4, 4)},
+			[](UFunction& F, UObject*, uint8* P)
+			{
+				FVector& A = F.Param<FVector>(P, 0);
+				const double Length = std::sqrt(A.X * A.X + A.Y * A.Y + A.Z * A.Z);
+				A = FVector(A.X / Length, A.Y / Length, A.Z / Length);
+			});
+		// Arrays: returned (to a sink), passed in (from a slice).
+		AddFunction(Strings, "ParseIntoArray",
+			{Param("SourceString", "StrProperty", Str, StrAlign), Param("Delimiter", "StrProperty", Str, StrAlign), Param("CullEmptyStrings", "BoolProperty", 1, 1),
+				ArrayParam<FString>("ReturnValue", Param("ReturnValue", "StrProperty", Str, StrAlign), CPF_ReturnParm)},
+			[](UFunction& F, UObject*, uint8* P) { F.Param<FString>(P, 0).ParseIntoArray(F.Param<TArray<FString>>(P, 3), *F.Param<FString>(P, 1)); });
+		AddFunction(Strings, "JoinStringArray",
+			{ArrayParam<FString>("SourceArray", Param("SourceArray", "StrProperty", Str, StrAlign), CPF_OutParm), Param("Separator", "StrProperty", Str, StrAlign), Return("StrProperty", Str, StrAlign)},
+			[](UFunction& F, UObject*, uint8* P)
+			{
+				std::u16string Out;
+				for (const FString& S : F.Param<TArray<FString>>(P, 0))
+				{
+					Out += (Out.empty() ? u"" : F.Param<FString>(P, 1).Str) + S.Str;
+				}
+				F.Param<FString>(P, 2) = FString(Out);
+			});
+		// Hits the world context object, unless it is ignored.
+		AddFunction(System, "LineTraceSingle",
+			{Param("WorldContextObject", "ObjectProperty", Ptr, Ptr), StructParam<FVector>("Start", &Vector), StructParam<FVector>("End", &Vector), Param("TraceChannel", "ByteProperty", 1, 1),
+				Param("bTraceComplex", "BoolProperty", 1, 1), ArrayParam<UObject*>("ActorsToIgnore", Param("ActorsToIgnore", "ObjectProperty", Ptr, Ptr), CPF_OutParm),
+				Param("DrawDebugType", "ByteProperty", 1, 1), OutParam<FHitResult>("OutHit", &HitResult), Param("bIgnoreSelf", "BoolProperty", 1, 1),
+				StructParam<FLinearColor>("TraceColor", &LinearColor), StructParam<FLinearColor>("TraceHitColor", &LinearColor), Param("DrawTime", "FloatProperty", 4, 4), Return("BoolProperty", 1, 1)},
+			[](UFunction& F, UObject*, uint8* P)
+			{
+				UObject* Target = F.Param<UObject*>(P, 0);
+				if (F.Param<TArray<UObject*>>(P, 5).Contains(Target))
+				{
+					return;
+				}
+				FHitResult& Hit = F.Param<FHitResult>(P, 7);
+				Hit.bBlockingHit = true;
+				Hit.Location = F.Param<FVector>(P, 2);
+				Hit.HitObjectHandle = FActorInstanceHandle(Cast<AActor>(Target));
+				F.Param<bool>(P, 12) = true;
 			});
 		AddFunction(System, "GetDisplayName", {Param("Object", "ObjectProperty", Ptr, Ptr), Return("StrProperty", Str, StrAlign)},
 			[](UFunction& F, UObject*, uint8* P) { F.Param<FString>(P, 1) = FString(F.Param<UObject*>(P, 0) ? u"Rusty actor" : u"None"); });
@@ -236,16 +310,21 @@ int main()
 	Actor->MockClass = &Engine.Actor;
 	UPrimitiveComponent* Component = new UPrimitiveComponent();
 	Component->MockClass = &Engine.PrimitiveComponent;
+	State.Owner = Component;
 	const std::string Report = ToUtf8(Ferreal::HelloRust::Poke(Actor, Component));
 	EXPECT(Report == "Rusty actor own=true turned=true z=3 tagged=true collision=3 age=0");
-	EXPECT(State.bHidden && State.Owner == Actor && State.Rotation.Yaw == 20.0 && State.Rotation.Roll == 30.0);
+	EXPECT(State.bHidden && State.Owner == nullptr && State.Rotation.Yaw == 20.0 && State.Rotation.Roll == 30.0);
 	EXPECT(!State.bVisible && State.bPropagate && State.Collision == 3);
 	EXPECT(Logged("/Script/Engine.Actor.GetGameTimeSinceCreation cannot be called from Rust"));
 	// C++ written inline in the Rust (cpp!): a plain method, FMath, a string passed both ways.
 	EXPECT(ToUtf8(Ferreal::HelloRust::Label(Actor, 1)) == "Rusty actor x2");
 	EXPECT(ToUtf8(Ferreal::HelloRust::Label(Actor, 5)) == "Rusty actor x5");
 	// Engine structs copied to Rust (FHitResult field by field, FTransform through its accessors).
-	EXPECT(ToUtf8(Ferreal::HelloRust::Hit(Actor, Component)) == "blocking=true time=0.5 z=3 component=true bone=Spine scale=2 turn=0.5 later=1.5 Spine moved=13 next=2");
+	EXPECT(ToUtf8(Ferreal::HelloRust::Hit(Actor, Component)) == "blocking=true time=0.5 z=3 component=true actor=true bone=Spine scale=2 turn=0.5 later=1.5 Spine moved=13 next=2");
+	// Outputs: an FHitResult the engine fills, an FVector it reads and changes.
+	EXPECT(ToUtf8(Ferreal::HelloRust::Sweep(Actor)) == "moved=true swept=0.25 actor=true x=0.600");
+	// Arrays: of strings returned and passed, of objects passed with an FHitResult out.
+	EXPECT(ToUtf8(Ferreal::HelloRust::Trace(Actor)) == "parts=[\"a\", \"b\", \"c\"] joined=x+y hit=true z=-100 actor=true ignored=false");
 	// An object of the wrong class is refused, not called.
 	EXPECT(ToUtf8(Ferreal::HelloRust::Poke(reinterpret_cast<AActor*>(Component), Component)).find("own=false") != std::string::npos
 		|| Logged("which is not a valid Actor"));

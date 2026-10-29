@@ -29,7 +29,7 @@ namespace EpicGames.UHT.Tables
 namespace EpicGames.UHT.Types
 {
 	public class UhtMetaData : Dictionary<string, string> { }
-	public class UhtType { public string SourceName = ""; public string EngineName = ""; public string EngineClassName = ""; public UhtMetaData MetaData = new(); public List<UhtType> Children = new(); }
+	public class UhtType { public string SourceName = ""; public string EngineName = ""; public virtual string EngineClassName { get; set; } = ""; public UhtMetaData MetaData = new(); public List<UhtType> Children = new(); }
 	public enum UhtClassType { Class, Interface, NativeInterface }
 	public class UhtClass : UhtType { public UhtClassType ClassType; public UhtClass SuperClass; public EpicGames.Core.EClassFlags ClassFlags; public List<UhtFunction> Functions = new(); }
 	public enum UhtFunctionType { Function, Delegate }
@@ -41,7 +41,12 @@ namespace EpicGames.UHT.Types
 	public class UhtUInt16Property : UhtProperty { } public class UhtUInt32Property : UhtProperty { } public class UhtUInt64Property : UhtProperty { }
 	public class UhtFloatProperty : UhtProperty { } public class UhtDoubleProperty : UhtProperty { } public class UhtLargeWorldCoordinatesRealProperty : UhtDoubleProperty { }
 	public class UhtStrProperty : UhtProperty { } public class UhtNameProperty : UhtProperty { } public class UhtTextProperty : UhtProperty { }
-	public class UhtEnumProperty : UhtProperty { public UhtEnum Enum; }
+	// As UHT's: only an enum class is an EnumProperty; an old namespaced or plain enum is a byte.
+	public class UhtEnumProperty : UhtProperty
+	{
+		public UhtEnum Enum;
+		public override string EngineClassName => Enum.CppForm != UhtEnumCppForm.EnumClass ? "ByteProperty" : "EnumProperty";
+	}
 	public class UhtScriptStruct : UhtType { public EpicGames.Core.EStructFlags ScriptStructFlags; public UhtScriptStruct SuperScriptStruct; public IEnumerable<UhtProperty> Properties => Children.OfType<UhtProperty>(); }
 	public class UhtStructProperty : UhtProperty { public UhtScriptStruct ScriptStruct; }
 	public class UhtObjectPropertyBase : UhtProperty { public UhtClass Class; }
@@ -53,7 +58,8 @@ namespace EpicGames.UHT.Types
 	public class UhtArrayProperty : UhtProperty { public UhtProperty ValueProperty; }
 	public enum UhtEnumUnderlyingType { Unspecified, Uint8, Uint16, Uint32, Uint64, Int8, Int16, Int32, Int64, Int }
 	public class UhtEnumValue { public string Name = ""; public long Value; }
-	public class UhtEnum : UhtType { public UhtEnumUnderlyingType UnderlyingType; public List<UhtEnumValue> EnumValues = new(); }
+	public enum UhtEnumCppForm { Regular, Namespaced, EnumClass }
+	public class UhtEnum : UhtType { public UhtEnumCppForm CppForm; public string CppType = ""; public string FullyQualifiedCppType => CppType; public UhtEnumUnderlyingType UnderlyingType; public List<UhtEnumValue> EnumValues = new(); }
 	public class UhtHeaderFile { public List<UhtType> Children = new(); public string IncludeFilePath; public string ModuleRelativeFilePath; }
 	public class UhtModule { public string ShortName = ""; public List<UhtHeaderFile> Headers = new(); }
 	public class UhtSession { public List<UhtModule> Modules = new(); }

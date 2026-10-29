@@ -173,6 +173,52 @@ impl<T> Slice<T> {
     }
 }
 
+/// Where C++ hands Rust the elements of an array, one carrier at a time, each copied at once
+/// (while its `TArray` is alive). [`Collect`] makes one.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Sink {
+    pub ctx: *mut c_void,
+    pub push: unsafe extern "C" fn(*mut c_void, *const c_void),
+}
+
+/// The elements of an array C++ returns, from their carriers `C` through `convert`.
+pub struct Collect<C, T, F> {
+    items: Vec<T>,
+    convert: F,
+    carrier: PhantomData<fn(C)>,
+}
+
+impl<C: Copy, T, F: FnMut(C) -> T> Collect<C, T, F> {
+    pub fn new(convert: F) -> Self {
+        Collect {
+            items: Vec::new(),
+            convert,
+            carrier: PhantomData,
+        }
+    }
+
+    /// A sink pushing into `self`, which stays where it is while C++ uses it (the call).
+    pub fn sink(&mut self) -> Sink {
+        Sink {
+            ctx: (self as *mut Self).cast(),
+            push: push::<C, T, F>,
+        }
+    }
+
+    pub fn into_vec(self) -> Vec<T> {
+        self.items
+    }
+}
+
+unsafe extern "C" fn push<C: Copy, T, F: FnMut(C) -> T>(ctx: *mut c_void, item: *const c_void) {
+    // SAFETY: `ctx` is the Collect whose sink C++ was given, alive for the call, and `item`
+    // one of its carriers.
+    let collect = unsafe { &mut *ctx.cast::<Collect<C, T, F>>() };
+    let item = unsafe { item.cast::<C>().read() };
+    collect.items.push((collect.convert)(item));
+}
+
 /// A table of C++ functions that C++ hands to Rust once (the generated registration).
 pub struct Table<T> {
     ptr: AtomicPtr<T>,

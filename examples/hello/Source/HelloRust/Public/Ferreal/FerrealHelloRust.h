@@ -35,4 +35,17 @@ namespace Ferreal::HelloRust
 	 * the engine makes, and the actor's `FTransform` (a `const FTransform&` in C++).
 	 */
 	HELLORUST_API FString Hit(AActor* InActor, UPrimitiveComponent* InComponent);
+
+	/**
+	 * `Ferreal::HelloRust::Sweep(...)` from C++: output parameters. The engine fills
+	 * `FHitResult& SweepHitResult`, which Rust gets back with the return value; it reads and
+	 * changes `UPARAM(ref) FVector& A`, a `&mut` in Rust.
+	 */
+	HELLORUST_API FString Sweep(AActor* InActor);
+
+	/**
+	 * `Ferreal::HelloRust::Trace(...)` from C++: arrays. Strings returned (a `Vec`) and passed
+	 * (a slice); a line trace that ignores the actors it is given, and fills an `FHitResult`.
+	 */
+	HELLORUST_API FString Trace(AActor* InActor);
 }

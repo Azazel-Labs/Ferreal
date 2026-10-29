@@ -4,9 +4,9 @@
 //! |---|---|
 //! | `mock-ue [--cxx <compiler>]` | Builds the example, compiles its C++ against the mock engine headers, links the Rust and runs the test. |
 //! | `exporter` | Runs the exporter over the made-up session of Unreal Header Tool, writing the mock engine's reflection data (needs the .NET SDK). |
-//! | `test` | `cargo test`, then `exporter` and `mock-ue`. |
+//! | `test` | `exporter`, then `cargo test` and `mock-ue`. |
 //! | `lint` | `cargo fmt --check` and `cargo clippy`, warnings as errors. |
-//! | `ue [--engine <dir>]` | Builds the host project (tests/ue-host), with the plugin and the example, in a real Unreal Engine. |
+//! | `ue [--engine <dir>] [--test]` | Builds the host project (tests/ue-host), with the plugin and the example, in a real Unreal Engine; `--test` then runs its test of the example in a headless editor. |
 
 use std::env;
 use std::ffi::OsStr;
@@ -23,11 +23,13 @@ tasks:
   mock-ue [--cxx <compiler>]  build the example and run its C++ against the mock engine
                               (compiler: --cxx, else $CXX, else clang++ on Windows, c++ elsewhere)
   exporter                    run the exporter over the made-up UHT session (needs the .NET SDK)
-  test                        cargo test, then exporter and mock-ue
+  test                        exporter, then cargo test and mock-ue
   lint                        cargo fmt --check and cargo clippy, warnings as errors
-  ue [--engine <dir>]         build tests/ue-host's editor target, with the Ferreal plugin and the
+  ue [--engine <dir>] [--test]
+                              build tests/ue-host's editor target, with the Ferreal plugin and the
                               example, in a real engine (engine: --engine, else $UE_ROOT, else
-                              the launcher's default UE_5.8)";
+                              the launcher's default UE_5.8); --test then runs the host's test of
+                              the example (Ferreal.*) in a headless editor";
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -38,8 +40,18 @@ fn main() {
         ["exporter"] => exporter(),
         ["test"] => test(),
         ["lint"] => lint(),
-        ["ue"] => ue(None),
-        ["ue", "--engine", engine] => ue(Some(engine)),
+        ["ue", rest @ ..] => match rest {
+            [] => ue(None, false),
+            ["--test"] => ue(None, true),
+            ["--engine", engine] => ue(Some(engine), false),
+            ["--engine", engine, "--test"] | ["--test", "--engine", engine] => {
+                ue(Some(engine), true)
+            }
+            _ => Err(format!(
+                "unknown arguments to ue: {}\n\n{USAGE}",
+                rest.join(" ")
+            )),
+        },
         ["help" | "--help" | "-h"] | [] => {
             println!("{USAGE}");
             Ok(())
@@ -76,28 +88,50 @@ fn run(command: &mut Command) -> Result {
     }
 }
 
+/// Builds the example against the mock engine's reflection data (the exporter's output for
+/// the made-up session of tests/exporter, as an Unreal build passes FerrealEngine.json): the
+/// repository holds no export of a real engine. Its glue and lock file go to
+/// `target/mock-ue-glue`, apart from the example's (an Unreal build's); cargo writes them only
+/// when they change.
+fn mock_engine(command: &mut Command) -> &mut Command {
+    let root = root();
+    let glue = target_dir().join("mock-ue-glue");
+    command
+        .env(
+            "FERREAL_ENGINE_METADATA",
+            root.join("tests/mock-ue/FerrealEngine.json"),
+        )
+        .env("FERREAL_ENGINE_LOCK", glue.join("ferreal-engine.json"))
+        .env("FERREAL_OUTPUT", glue)
+}
+
+fn target_dir() -> PathBuf {
+    env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), PathBuf::from)
+}
+
 fn test() -> Result {
-    run(cargo().args(["test", "--workspace"]))?;
+    // The mock engine's data first: the example's build reads it.
     exporter()?;
+    run(mock_engine(cargo().args(["test", "--workspace"])))?;
     mock_ue(None)
 }
 
 fn lint() -> Result {
     run(cargo().args(["fmt", "--all", "--", "--check"]))?;
-    run(cargo().args([
+    run(mock_engine(cargo().args([
         "clippy",
         "--workspace",
         "--all-targets",
         "--",
         "-D",
         "warnings",
-    ]))
+    ])))
 }
 
 /// Builds the host project's editor target with Unreal Build Tool, its Plugins folder linking
 /// to the Ferreal plugin and the example. A build that exports reflection data the example
 /// had not had yet asks for another (see HelloRust.Build.cs), which this runs.
-fn ue(engine: Option<&str>) -> Result {
+fn ue(engine: Option<&str>, test: bool) -> Result {
     let root = root();
     let engine = engine
         .map(PathBuf::from)
@@ -131,7 +165,13 @@ fn ue(engine: Option<&str>) -> Result {
     link_dir(&root.join("unreal/Ferreal"), &plugins.join("Ferreal"))?;
     link_dir(&root.join("examples/hello"), &plugins.join("HelloRust"))?;
 
+    // The reflection data the Ferreal plugin exports during the build.
+    let export = root.join(format!(
+        "unreal/Ferreal/Intermediate/Build/{platform}/UnrealEditor/Inc/FerrealMetadata/UHT/FerrealEngine.json"
+    ));
+    let exported = || fs::metadata(&export).and_then(|m| m.modified()).ok();
     for _ in 0..2 {
+        let before = exported();
         let mut child = Command::new(&build)
             .args(["FerrealHostEditor", platform, "Development", "-WaitMutex"])
             .arg(format!(
@@ -141,25 +181,102 @@ fn ue(engine: Option<&str>) -> Result {
             .stdout(Stdio::piped())
             .spawn()
             .map_err(|e| format!("could not run {}: {e}", build.display()))?;
-        let mut again = false;
+        let (mut again, mut cargo_failed) = (false, false);
         for line in BufReader::new(child.stdout.take().unwrap()).split(b'\n') {
             let line = line.map_err(|e| format!("could not read the build's output: {e}"))?;
             let line = String::from_utf8_lossy(&line);
             again |= line.contains("Build again to generate the bindings");
+            cargo_failed |= line.contains("Rust: cargo failed");
             println!("{}", line.trim_end());
         }
         let status = child
             .wait()
             .map_err(|e| format!("could not wait for the build: {e}"))?;
+        // The Rust may have failed against reflection data this build replaced.
+        if cargo_failed && exported() != before {
+            println!("xtask: cargo failed, and the reflection data changed: building again");
+            continue;
+        }
         if !status.success() {
             return Err(format!("the Unreal build failed ({status})"));
         }
         if !again {
-            return Ok(());
+            return if test {
+                ue_test(&engine, platform, &host)
+            } else {
+                Ok(())
+            };
         }
         println!("xtask: building again, with the exported reflection data");
     }
-    Err("the second build still had no reflection data for the example's engine classes".into())
+    Err(
+        "the second build still had no reflection data for the example's engine classes, or failed"
+            .into(),
+    )
+}
+
+/// Runs the host project's automation tests (`Ferreal.*`, FerrealHostTest.cpp) in a headless
+/// editor, which fail on the errors Ferreal logs.
+fn ue_test(engine: &Path, platform: &str, host: &Path) -> Result {
+    let editor = engine.join(format!(
+        "Engine/Binaries/{platform}/UnrealEditor-Cmd{}",
+        env::consts::EXE_SUFFIX
+    ));
+    let mut command = Command::new(&editor);
+    command.arg(host.join("FerrealHost.uproject")).args([
+        "-unattended",
+        "-nullrhi",
+        "-nosplash",
+        "-nosound",
+        "-nop4",
+        "-stdout",
+        "-FullStdOutLogOutput",
+    ]);
+    // Values with spaces, quoted as Unreal parses them.
+    let quoted = [
+        "-ExecCmds=\"Automation RunTests Ferreal\"",
+        "-TestExit=\"Automation Test Queue Empty\"",
+    ];
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        for a in quoted {
+            command.raw_arg(a);
+        }
+    }
+    #[cfg(not(windows))]
+    command.args(quoted.map(|a| a.replace('"', "")));
+    println!("xtask: running the tests in {}", editor.display());
+    let mut child = command
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not run {}: {e}", editor.display()))?;
+    let (mut passed, mut failed) = (0, 0);
+    for line in BufReader::new(child.stdout.take().unwrap()).split(b'\n') {
+        let line = line.map_err(|e| format!("could not read the editor's output: {e}"))?;
+        let line = String::from_utf8_lossy(&line);
+        let line = line.trim_end();
+        // The editor says much; the tests' lines and errors are what matter here.
+        if line.contains("Result={Success}") {
+            passed += 1;
+        } else if line.contains("Result={") {
+            failed += 1;
+        }
+        if line.contains("LogAutomation") || line.contains("Ferreal") || line.contains("Error:") {
+            println!("{line}");
+        }
+    }
+    let status = child
+        .wait()
+        .map_err(|e| format!("could not wait for the editor: {e}"))?;
+    match (passed, failed) {
+        (0, 0) => Err(format!("no test ran (the editor exited with {status})")),
+        (p, 0) => {
+            println!("xtask: {p} test(s) passed in the engine");
+            Ok(())
+        }
+        (_, f) => Err(format!("{f} test(s) failed in the engine")),
+    }
 }
 
 /// Makes `link` a link to the directory `target` (a junction on Windows, which needs no
@@ -206,16 +323,13 @@ fn mock_ue(cxx: Option<&str>) -> Result {
     let root = root();
     let here = root.join("tests/mock-ue");
     let module = root.join("examples/hello/Source/HelloRust");
-    let target = env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
+    let target = target_dir();
     let out = target.join("mock-ue");
-    // The glue and lock file of the mock engine's data, kept out of the example's (which are
-    // the real engine's); not cleaned, as cargo writes them only when they change.
     let glue = target.join("mock-ue-glue");
 
-    // The engine's reflection data comes from the exporter's output for the made-up session of
-    // tests/exporter (as an Unreal build passes FerrealEngine.json). Building through
-    // `cargo rustc` also reports the system libraries the static library needs.
-    let build = cargo()
+    // Building through `cargo rustc` also reports the system libraries the static library
+    // needs.
+    let build = mock_engine(&mut cargo())
         .args([
             "rustc",
             "--quiet",
@@ -226,9 +340,6 @@ fn mock_ue(cxx: Option<&str>) -> Result {
             "staticlib",
         ])
         .args(["--", "--print", "native-static-libs"])
-        .env("FERREAL_ENGINE_METADATA", here.join("FerrealEngine.json"))
-        .env("FERREAL_ENGINE_LOCK", glue.join("ferreal-engine.json"))
-        .env("FERREAL_OUTPUT", &glue)
         .output()
         .map_err(|e| format!("could not run cargo: {e}"))?;
     let stderr = String::from_utf8_lossy(&build.stderr);
