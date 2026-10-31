@@ -1,0 +1,16 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Ferreal Sample",
+	"Description": "Orbs to collect, and the rules of collecting them, written in Rust with Ferreal.",
+	"Category": "Gameplay",
+	"CanContainContent": false,
+	"Modules": [
+		{
+			"Name": "FerrealSample",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

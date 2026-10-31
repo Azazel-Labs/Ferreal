@@ -1,0 +1,23 @@
+[package]
+name = "ferreal-hello"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Ferreal's test fixture: a UCLASS written in Rust, built into the HelloRust Unreal module"
+
+[lib]
+# The Unreal module links the static library.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+ferreal.workspace = true
+# Engine types shared with other crates (tests/hello/types).
+ferreal-hello-types = { path = "../types" }
+
+[build-dependencies]
+ferreal-build.workspace = true
+
+[lints]
+workspace = true

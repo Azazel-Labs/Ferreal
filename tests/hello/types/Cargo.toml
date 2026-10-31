@@ -1,0 +1,19 @@
+[package]
+name = "ferreal-hello-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Ferreal's example of engine types shared by Rust crates: the HelloRust module's crate uses these as its own"
+# Through which cargo hands the crates depending on this one what it holds.
+links = "ferreal-types-hello"
+
+[dependencies]
+ferreal.workspace = true
+
+[build-dependencies]
+ferreal-build.workspace = true
+
+[lints]
+workspace = true

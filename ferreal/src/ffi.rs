@@ -219,6 +219,16 @@ unsafe extern "C" fn push<C: Copy, T, F: FnMut(C) -> T>(ctx: *mut c_void, item: 
     collect.items.push((collect.convert)(item));
 }
 
+/// The body of an engine function the build script generated no C++ for: it finds the
+/// functions a crate calls by their names in the crate's source, and missed this one (a call
+/// written by another crate's macro, say).
+#[cold]
+pub fn not_generated(function: &str, name: &str) -> ! {
+    panic!(
+        "ferreal: {function} has no C++: the build script generates it for the functions it finds called in the crate's source, and found no `{name}` there (call it from this crate's code, not another crate's macro)"
+    )
+}
+
 /// A table of C++ functions that C++ hands to Rust once (the generated registration).
 pub struct Table<T> {
     ptr: AtomicPtr<T>,

@@ -57,8 +57,10 @@ Rust crate ──cargo──> static library ───────────�
 ```
 
 The module's `Build.cs` runs cargo before Unreal Header Tool reads the headers (see
-[examples/hello](examples/hello/Source/HelloRust/HelloRust.Build.cs): its "Rust" region is
-the part to copy), and tells Unreal Build Tool to run again when the Rust changes.
+[FerrealSample.Build.cs](examples/UnrealGame/Plugins/FerrealSample/Source/FerrealSample/FerrealSample.Build.cs):
+its "Rust" region is the part to copy), and tells Unreal Build Tool to run again when the
+Rust changes. The module is usually a plugin's, which the game's C++ and Blueprints use as they
+would a C++ plugin: its classes are ordinary `UCLASS`es, its headers ordinary headers.
 
 What lives where:
 
@@ -210,20 +212,41 @@ has `ActorApi`), its static functions on the marker, and newtypes of the enums t
 `Obj<C>` whose class `IsA` the one asked for (`.upcast()` converts explicitly). Classes the
 signatures mention get markers, so they can be passed and returned; name them to call theirs.
 
-**Where the data comes from.** The Ferreal plugin ([unreal/Ferreal](unreal/Ferreal)) holds an
-exporter for Unreal Header Tool: during every Unreal build it writes the reflection data of
-every class and enum UHT parsed (engine, project, plugins) to `FerrealEngine.json`. The
-Build.cs template finds it and passes it to cargo (`FERREAL_ENGINE_METADATA`). The part a
-crate uses is kept next to its `Cargo.toml` in `ferreal-engine.json`, a snapshot of the engine
-it was built with: a project can commit it, so a build machine outside Unreal builds without
-the export (this repository does not: its example is tested against the mock engine's data,
-and against whichever engine `cargo xtask ue` builds with). Naming a class not
-exported yet takes one more build: the first exports it (the template reports this and lets
-the build go on), the next generates its bindings. So does calling a `UFUNCTION` added to C++
-in the same change: cargo fails against the old data, and the template, rather than stop the
-build there, prints cargo's errors and lets Unreal Header Tool export the new data, failing
-the build later (a `FerrealCargoFailed.cpp` it writes holds an `#error`, and deletes once
-cargo succeeds). The next build has the data.
+**Where the data comes from.** A crate's build writes Ferreal's exporter for Unreal Header
+Tool ([ferreal-build/exporter](ferreal-build/exporter)) beside its Unreal module, in the
+plugin: `Source/<Module>Exporter`, a plugin of Unreal Build Tool (`.ubtplugin.csproj`), which
+UBT builds with the project. During every build it writes the reflection data of every class
+and enum UHT parsed (engine, project, plugins) to
+`<Project>/Intermediate/Ferreal/FerrealEngine.json`, and the Build.cs template passes that to
+cargo (`FERREAL_ENGINE_METADATA`). Each plugin's copy is named after its module, and the first
+to run in a build exports for all. The part a crate uses is kept next to its `Cargo.toml` in
+`ferreal-engine.json`, a snapshot of the engine it was built with, which the build reads
+outside Unreal (rust-analyzer, `cargo check`).
+
+**One build, always.** The Build.cs runs cargo before Unreal Header Tool exports the data: in
+a fresh checkout it has none, and a crate calling a `UFUNCTION` added to C++ in the same change
+has old data. Then the template does not stop the build. It writes a `FerrealCargoFailed.cpp`
+holding an `#error`, and leaves the cargo build to the exporter
+(`Intermediate/Ferreal/Pending`), which runs it once it has exported the data, after Unreal
+Header Tool has read the headers and before the C++ compiles; if that succeeds, the `#error`
+goes. Meanwhile the crate's build writes all it can without the data: the headers Unreal
+Header Tool reads, and, empty, the sources the exporter's build fills in (Unreal Build Tool
+lists a module's sources before then). What Unreal Header Tool reads does not depend on the
+data: a header includes the headers of the engine classes it passes, and without the data
+declares them ahead instead (`class AActor;`), or keeps the includes the last build wrote;
+the exporter's build writes the includes, which Unreal Header Tool does not read. There is a
+source per class `ferreal::engine!` names, whether the crate calls its functions or not
+(those of shared types' classes go in `Ferreal<Module>Engine.cpp`). A crate of shared types
+without the data hands on none, and fails to compile instead, so that the crates depending on
+it write theirs. A build without new data runs cargo once, as before. A Rust error stays an
+error: the build fails with cargo's errors.
+
+**Dependencies.** With the data, ferreal-build lists the modules of the engine classes,
+structs and enums the crate uses in `Private/Ferreal/FerrealModules.txt`, which the Build.cs
+template adds to the module's dependencies, and adds their plugins to the `Plugins` of the
+plugin's `.uplugin` (EnhancedInput for `UInputMappingContext`). Unreal enables plugins before a
+Build.cs runs: if the project does not enable a plugin newly added there, the build that adds
+it fails, and the next one has it. Commit both files with the glue.
 
 **How calls are made.** Each call goes through a generated C++ thunk that fills a struct of
 the function's parameters, laid out by the C++ compiler, and calls `ProcessEvent`, as
@@ -242,7 +265,7 @@ each item also carries its C++ name as a doc alias (`AActor`, `K2_SetActorLocati
 `cargo doc` renders them. Outside an Unreal build, the build script reads the lock file; to
 see a class you have just named before the next Unreal build, point rust-analyzer at the
 exporter's output: `"rust-analyzer.cargo.extraEnv": { "FERREAL_ENGINE_METADATA":
-"<Project>/Plugins/Ferreal/Intermediate/Build/<Platform>/<Target>/Inc/FerrealMetadata/UHT/FerrealEngine.json" }`.
+"<Project>/Intermediate/Ferreal/FerrealEngine.json" }`.
 The generated C++ sits in the module's `Source`, so the IDE project Unreal generates indexes
 it too.
 
@@ -290,7 +313,34 @@ maps itself. An `FActorInstanceHandle` (`FHitResult::HitObjectHandle`, whose one
 private) is copied as its actor, an `Option<Obj<Actor>>`, as `FHitResult::GetActor` returns
 it.
 
+**Sharing engine types between crates.** Each crate's `engine` module is its own, so two
+Unreal modules' crates that both name `AActor` have two `Actor` types. To pass engine handles,
+structs and enums between crates, put the types in a crate of their own, which the modules'
+crates depend on:
+
+```rust
+// game-types/src/lib.rs (Cargo.toml: a plain library, with `links = "ferreal-types-game"`)
+ferreal::engine!(AActor, UPrimitiveComponent);
+ferreal::engine_types!();
+
+// game-types/build.rs
+fn main() {
+    ferreal_build::Types::new().run();
+}
+```
+
+It holds the markers of the classes it names, and the structs and enums their functions pass,
+and no functions or C++. A crate depending on it uses these types as its own (its `engine`
+module re-exports them) and binds the functions it calls on them, so an
+`Obj<engine::Actor>` or an `engine::HitResult` of one crate is the other's. The static
+functions of a shared class are a trait of the crate's, `<Class>Statics`, which `use
+engine::*` brings. Cargo hands the crates depending on it what it holds through its `links`
+key; each struct is checked to be copied the same way in both (built from the same
+reflection data). See [tests/hello/types](tests/hello/types).
+
 ## Setting up a module
+
+For a Rust plugin in a project's `Plugins` (as [FerrealSample](examples/UnrealGame/Plugins/FerrealSample)):
 
 1. A Rust crate with `crate-type = ["staticlib"]`, depending on `ferreal` (and on
    `ferreal-build` as a build dependency).
@@ -302,11 +352,14 @@ it.
    ```
 3. `ferreal::module!();` in its `lib.rs`.
 4. The module's `Build.cs`: the "Rust" region of
-   [HelloRust.Build.cs](examples/hello/Source/HelloRust/HelloRust.Build.cs), and a call to
-   `BuildRust(...)`. Add a `[profile.unreal]` (release with `panic = "unwind"`) to the
-   workspace's `Cargo.toml`, as this repository's.
-5. For `ferreal::engine!`: copy [unreal/Ferreal](unreal/Ferreal) into the project's `Plugins`
-   (Unreal Build Tool builds its exporter, a `.ubtplugin.csproj`, with the project).
+   [FerrealSample.Build.cs](examples/UnrealGame/Plugins/FerrealSample/Source/FerrealSample/FerrealSample.Build.cs),
+   and a call to `BuildRust(...)`. Add a `[profile.unreal]` (release with `panic = "unwind"`)
+   to the workspace's `Cargo.toml`, as the example's.
+Nothing is installed in the engine, and the plugin depends on no other: the crate's build
+writes the module's glue and, beside the module, the exporter (`Source/<Module>Exporter`).
+Commit the exporter with the plugin: Unreal Build Tool sets its plugins up before any Build.cs
+runs, so the build that first writes it only uses it from the next. With it, every build,
+of a fresh checkout too, succeeds the first time.
 
 The generated files can be committed (their diffs show what changed in the C++ API); the
 build writes them again either way, and removes those it no longer generates.
@@ -316,11 +369,11 @@ build writes them again either way, and removes those it no longer generates.
 The repository's tasks run on every platform through `cargo xtask` ([xtask](xtask/src/main.rs)):
 `test` runs `cargo test`, then the two below; `lint` runs rustfmt and Clippy.
 
-`cargo xtask mock-ue` builds the example, compiles its C++ (the hand-written parent and the
+`cargo xtask mock-ue` builds the test plugin, [tests/hello](tests/hello), compiles its C++ (the hand-written parent and the
 generated glue) against minimal stand-ins for the engine headers it uses, links the Rust and
 runs a test that drives the class through the glue: properties of every type, functions,
 overrides, Rust calling C++, change notifications, a caught panic, destruction. It also calls the
-engine bindings of the example's `ferreal::engine!` against a mock engine whose reflection lays
+engine bindings of its `ferreal::engine!` against a mock engine whose reflection lays
 parameters out the way the engine links functions, and whose natives read them through those
 offsets: every kind of parameter and return value, static functions, and a function the mock
 engine declares differently, which the check must disable. The reflection data it builds
@@ -335,12 +388,38 @@ exercises.
 ## Testing in Unreal
 
 `cargo xtask ue [--engine <dir>]` builds [tests/ue-host](tests/ue-host), a project whose
-`Plugins` link to the Ferreal plugin and the example, with the engine's own tools (the engine:
-`--engine`, else `UE_ROOT`, else the launcher's default 5.8). With `--test`, it then runs the
-host's automation test ([FerrealHostTest.cpp](tests/ue-host/Source/FerrealHost/FerrealHostTest.cpp))
-in a headless editor: the Rust class, and the example's engine calls, structs, outputs, arrays
-and `cpp!` blocks, on an actor in a real world. A call Ferreal refuses logs an error, which
+`Plugins` link to the test plugin, with the engine's own tools (the engine: `--engine`, else
+`UE_ROOT`, else the launcher's default 5.8). With `--test`, it then runs the host's automation test
+([FerrealHostTest.cpp](tests/ue-host/Source/FerrealHost/FerrealHostTest.cpp)) in a headless
+editor: the Rust class, and the test plugin's engine calls, structs, outputs, arrays and
+`cpp!` blocks, on an actor in a real world. A call Ferreal refuses logs an error, which
 fails the test.
+
+## The example game
+
+[examples/UnrealGame](examples/UnrealGame) is Unreal's first-person template with a Rust
+plugin, [FerrealSample](examples/UnrealGame/Plugins/FerrealSample): rounds of orbs to collect
+([Rust/src/lib.rs](examples/UnrealGame/Plugins/FerrealSample/Rust/src/lib.rs)). The plugin's
+module holds two small C++ parents, for what a constructor or the engine's own callbacks must
+do; its Build.cs is the template's. The game's own module is
+plain C++ and uses the plugin as it would a C++ one: its console commands
+([OrbCommands.cpp](examples/UnrealGame/Source/UnrealGame/Private/OrbCommands.cpp)),
+`Orbs.Round` and `Orbs.Collect`, include `Ferreal/OrbGame.h` and call the Rust class's
+`UFUNCTION`s.
+
+* `AOrb` derives from `AOrbBase` (a sphere that ticks). It overrides `BeginPlay` and `Tick`
+  in Rust to circle, bob and take a color of its own. It is `Blueprintable`, with editable
+  properties, so you can place orbs in the level too.
+* `UOrbGame` derives from `UOrbGameBase`, a world subsystem: the engine creates one in every
+  game world, so nothing needs placing or setting. It spawns a ring of orbs around the player
+  (in a `cpp!` block, since Blueprint's spawn nodes are internal), collects those the player
+  reaches, and shows the score with `PrintString`. Each won round starts a bigger one.
+
+The plugin's crate is a workspace of its own: it builds against the engine it is built in,
+not the mock engine the repository's tests use. `cargo xtask game [--engine <dir>]` builds it.
+`--play` opens the game in a window, and `cargo xtask editor` opens it in the Unreal Editor.
+`--check` plays it headless with `-OrbAutopilot`, which moves the player from orb to orb, and
+passes once two rounds are won with no error from Ferreal.
 
 ## Limitations
 

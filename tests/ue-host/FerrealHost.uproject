@@ -2,7 +2,7 @@
 	"FileVersion": 3,
 	"EngineAssociation": "5.8",
 	"Category": "",
-	"Description": "Builds Ferreal's plugin and example in a real Unreal build (cargo xtask ue).",
+	"Description": "Builds Ferreal's test plugin, HelloRust, in a real Unreal build (cargo xtask ue).",
 	"Modules": [
 		{
 			"Name": "FerrealHost",
@@ -11,10 +11,6 @@
 		}
 	],
 	"Plugins": [
-		{
-			"Name": "Ferreal",
-			"Enabled": true
-		},
 		{
 			"Name": "HelloRust",
 			"Enabled": true

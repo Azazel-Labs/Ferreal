@@ -14,8 +14,8 @@
 //! it against the function's reflection (its size, and each parameter's name, offset, size
 //! and property class) and disables the function, with an error in the log, if they differ.
 //!
-//! The reflection data comes from the Ferreal plugin's exporter (Unreal Header Tool writes
-//! `FerrealEngine.json`), found through `FERREAL_ENGINE_METADATA`. The classes a crate uses are
+//! The reflection data comes from Ferreal's exporter, which a crate's build writes beside its
+//! Unreal module (Unreal Header Tool runs it, writing `FerrealEngine.json`), found through `FERREAL_ENGINE_METADATA`. The classes a crate uses are
 //! also kept in a lock file next to its `Cargo.toml` (`ferreal-engine.json`): commit it, and a
 //! fresh checkout builds before Unreal has exported anything.
 
@@ -31,7 +31,8 @@ pub const FORMAT_VERSION: u32 = 1;
 /// The path of the exporter's `FerrealEngine.json` (the Build.cs template sets it).
 pub const METADATA_ENV: &str = "FERREAL_ENGINE_METADATA";
 /// Printed when a build needs reflection data Unreal has not exported yet: the Build.cs
-/// template lets that build go on (Unreal Header Tool then exports it) and asks for another.
+/// template lets that build go on, and Ferreal's exporter builds the crate again once Unreal
+/// Header Tool has exported it.
 pub const NEEDS_METADATA: &str = "FERREAL_NEEDS_ENGINE_METADATA";
 /// The lock file's name, next to the crate's `Cargo.toml`.
 pub const LOCK_FILE: &str = "ferreal-engine.json";
@@ -40,6 +41,10 @@ pub const LOCK_FILE: &str = "ferreal-engine.json";
 pub const LOCK_ENV: &str = "FERREAL_ENGINE_LOCK";
 /// A module directory to write the C++ into instead of the crate's (with [`LOCK_ENV`]).
 pub const OUTPUT_ENV: &str = "FERREAL_OUTPUT";
+/// Set (to `1`) by Ferreal's exporter when it builds a crate in the middle of an Unreal build,
+/// after Unreal Header Tool has read the headers: the C++ is then written without removing
+/// anything (see `write_deferred`).
+pub const DEFERRED_ENV: &str = "FERREAL_DEFERRED";
 
 fn is_false(b: &bool) -> bool {
     !*b
@@ -56,6 +61,18 @@ pub struct Metadata {
     pub structs: Vec<StructMeta>,
     #[serde(default)]
     pub enums: Vec<EnumMeta>,
+    /// The modules, with their plugins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<ModuleMeta>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ModuleMeta {
+    /// `EnhancedInput`.
+    pub name: String,
+    /// The plugin it is in (`EnhancedInput`); none for the engine's own modules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -226,7 +243,7 @@ impl Metadata {
             serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         if m.format != FORMAT || m.version != FORMAT_VERSION {
             return Err(format!(
-                "{}: not Ferreal's reflection data of version {FORMAT_VERSION} (format {:?}, version {}); update the Ferreal plugin and ferreal-build together",
+                "{}: not Ferreal's reflection data of version {FORMAT_VERSION} (format {:?}, version {}); build the Unreal project again to export it with this ferreal-build's exporter",
                 path.display(),
                 m.format,
                 m.version
@@ -261,8 +278,32 @@ struct Marker {
     path: String,
     /// Its bare name (`Actor`), which names its `<Name>Api` trait.
     name: String,
-    /// Declared by the generated code (else by the crate: a `Handle`).
+    /// Declared by the generated code (else by the crate: a `Handle`, or by a crate of
+    /// shared types).
     generated: bool,
+    /// Declared by a crate of shared types (with its `IsA`s).
+    shared: bool,
+}
+
+/// What a crate of shared engine types holds (`ferreal_build::Types`), for the crates that
+/// depend on it to use its types instead of generating their own.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Shared {
+    /// Its `engine` module (`::hello_types::engine`).
+    pub root: String,
+    /// Its class markers' Rust names, by C++ name.
+    pub classes: BTreeMap<String, String>,
+    /// Its structs, by C++ name.
+    pub structs: BTreeMap<String, SharedStruct>,
+    /// Its enums' Rust names, by C++ name.
+    pub enums: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct SharedStruct {
+    pub name: String,
+    /// The fields it copies, and how: the crates sharing it must copy the same.
+    pub layout: String,
 }
 
 /// A parameter type the bindings pass.
@@ -725,6 +766,15 @@ struct Bound {
     rust: String,
     params: Vec<BoundParam>,
     ret: Option<BoundParam>,
+    /// Its entry in the table of thunks, if it has a thunk (the crate calls it).
+    slot: Option<usize>,
+}
+
+impl Bound {
+    /// Its thunk's name in C++ (`AActor_GetOwner`): stable, whichever others are generated.
+    fn id(&self) -> String {
+        format!("{}_{}", self.class, self.function.cpp)
+    }
 }
 
 /// The bindings of a crate: what goes into its `engine` module, its `.cpp` and its lock file.
@@ -744,10 +794,29 @@ pub struct Bindings {
     struct_names: BTreeMap<String, String>,
     /// The enums `cpp!` blocks pass by name, whose headers the `cpp!` C++ includes.
     named_enums: BTreeSet<String>,
+    /// The structs `cpp!` blocks pass by name.
+    named_structs: BTreeSet<String>,
+    /// The crates of shared types used (their `engine` modules), and the structs and enums
+    /// theirs (not generated here; their names are theirs).
+    shared_roots: Vec<String>,
+    shared_structs: BTreeSet<String>,
+    shared_enums: BTreeMap<String, String>,
+    /// The structs whose conversions the C++ needs: those the thunks and `cpp!` blocks pass,
+    /// and those their fields hold (all of them until [`Bindings::keep_used`]).
+    cpp_structs: BTreeSet<String>,
     /// Functions left out, with why (shown in the generated file).
     skipped: Vec<(String, String)>,
     /// What the lock file keeps.
     pub lock: Metadata,
+}
+
+/// How a struct is copied: its fields, and their types.
+fn struct_layout(p: &StructPlan) -> String {
+    p.fields
+        .iter()
+        .map(|f| format!("{}:{:?}", f.cpp, f.ty))
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 /// `Rotator`, `Quat`, `Transform`, `IntPoint`, ...: math and core types `cpp!` passes by
@@ -804,6 +873,166 @@ impl Bindings {
         self.functions.is_empty()
     }
 
+    /// The types alone, for a crate of shared types: no functions (each crate using the types
+    /// binds the functions it calls).
+    pub fn types_only(&mut self) {
+        self.functions.clear();
+        self.bound_classes.clear();
+        self.skipped.clear();
+        self.cpp_structs.clear();
+    }
+
+    /// What these bindings hold, as a crate of shared types whose `engine` module is `root`.
+    pub fn shared(&self, root: &str) -> Shared {
+        Shared {
+            root: root.into(),
+            classes: self
+                .markers
+                .iter()
+                .filter(|(_, m)| m.generated)
+                .map(|(cpp, m)| (cpp.clone(), m.name.clone()))
+                .collect(),
+            structs: self
+                .structs
+                .iter()
+                .map(|p| {
+                    let cpp = p.meta.cpp.clone();
+                    let name = self.struct_names[&cpp].clone();
+                    (
+                        cpp,
+                        SharedStruct {
+                            name,
+                            layout: struct_layout(p),
+                        },
+                    )
+                })
+                .collect(),
+            enums: self
+                .enums
+                .iter()
+                .map(|e| (e.cpp.clone(), enum_rust_name(self, &e.cpp)))
+                .collect(),
+        }
+    }
+
+    /// Uses the types of the crates of shared types `shared` holds instead of generating them:
+    /// the same Rust types in every crate. A struct must be copied the same way here as there.
+    pub fn share(&mut self, shared: &[Shared]) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        for sh in shared {
+            let mut used = false;
+            for (cpp, m) in &mut self.markers {
+                // The crate's own types (#[uclass], engine_class!) stay its own.
+                if let (true, Some(name)) = (m.generated, sh.classes.get(cpp)) {
+                    *m = Marker {
+                        path: name.clone(),
+                        name: name.clone(),
+                        generated: false,
+                        shared: true,
+                    };
+                    used = true;
+                }
+            }
+            for p in &self.structs {
+                let cpp = &p.meta.cpp;
+                let Some(theirs) = sh.structs.get(cpp) else {
+                    continue;
+                };
+                if theirs.layout != struct_layout(p) {
+                    errors.push(format!(
+                        "{cpp}: {} copies it differently from this crate (built from other reflection data?): build them from the same",
+                        sh.root
+                    ));
+                    continue;
+                }
+                self.shared_structs.insert(cpp.clone());
+                self.struct_names.insert(cpp.clone(), theirs.name.clone());
+                used = true;
+            }
+            for e in &self.enums {
+                if let Some(name) = sh.enums.get(&e.cpp) {
+                    self.shared_enums.insert(e.cpp.clone(), name.clone());
+                    used = true;
+                }
+            }
+            if used {
+                self.shared_roots.push(sh.root.clone());
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Gives thunks only to the functions whose Rust names are among `idents` (the
+    /// identifiers of the crate's source): those it can call. The others stay in the Rust
+    /// bindings, documented, without C++.
+    pub fn keep_used(&mut self, idents: &BTreeSet<String>) {
+        let mut next = 0;
+        for f in &mut self.functions {
+            f.slot = idents.contains(&f.rust).then(|| {
+                next += 1;
+                next - 1
+            });
+        }
+        // The structs their thunks pass, then those these hold.
+        let mut needed = self.named_structs.clone();
+        for (_, f) in self.generated() {
+            for p in f.params.iter().chain(&f.ret) {
+                if let PTy::Struct(s) = p.ty.elem() {
+                    needed.insert(s.clone());
+                }
+            }
+        }
+        // `structs` lists those a struct holds first: walking it backwards reaches them after.
+        for p in self.structs.iter().rev() {
+            if needed.contains(&p.meta.cpp) {
+                for f in &p.fields {
+                    if let PTy::Struct(s) = &f.ty {
+                        needed.insert(s.clone());
+                    }
+                }
+            }
+        }
+        self.cpp_structs = needed;
+    }
+
+    /// The structs whose conversions the C++ has, in order.
+    fn structs_in_cpp(&self) -> impl Iterator<Item = &StructPlan> {
+        self.structs
+            .iter()
+            .filter(|p| self.cpp_structs.contains(&p.meta.cpp))
+    }
+
+    /// Whether any function has a thunk.
+    pub fn has_thunks(&self) -> bool {
+        self.functions.iter().any(|f| f.slot.is_some())
+    }
+
+    /// Whether the module has engine C++ (`Ferreal<M>Engine.h`): thunks, or the structs and
+    /// enums `cpp!` blocks pass.
+    pub fn has_cpp(&self) -> bool {
+        self.has_thunks() || !self.cpp_structs.is_empty() || !self.named_enums.is_empty()
+    }
+
+    /// The functions with thunks, in table order.
+    fn generated(&self) -> impl Iterator<Item = (usize, &Bound)> {
+        self.functions.iter().filter_map(|f| f.slot.map(|s| (s, f)))
+    }
+
+    /// The classes with thunks (a file each).
+    pub fn thunk_classes(&self) -> Vec<&str> {
+        let mut classes: Vec<&str> = Vec::new();
+        for (_, f) in self.generated() {
+            if !classes.contains(&f.class.as_str()) {
+                classes.push(&f.class);
+            }
+        }
+        classes
+    }
+
     /// A type `cpp!` passes by its Rust name: a math type, a generated struct or enum.
     pub fn named(&self, name: &str) -> Option<Named> {
         match name {
@@ -838,12 +1067,12 @@ impl Bindings {
     /// `Ferreal::<M>::Detail`).
     pub fn cpp_structs(&self) -> String {
         let mut o = String::new();
-        if self.structs.is_empty() {
+        if self.cpp_structs.is_empty() {
             return o;
         }
         // Fields C++ deprecates without telling reflection are copied too.
         o.push_str("\nPRAGMA_DISABLE_DEPRECATION_WARNINGS\n");
-        for p in &self.structs {
+        for p in self.structs_in_cpp() {
             self.cpp_struct(&mut o, p);
         }
         o.push_str("PRAGMA_ENABLE_DEPRECATION_WARNINGS\n");
@@ -855,13 +1084,16 @@ impl Bindings {
         self.markers.get(cpp).map(|m| m.path.as_str())
     }
 
-    /// The generated markers (by Rust name) with their C++ class and header, for
-    /// `Obj<engine::X>` in `#[uclass]` items.
+    /// The markers in the `engine` module, generated or shared (by Rust name), with their C++
+    /// class and header, for `Obj<engine::X>` in `#[uclass]` items.
     pub fn marker_classes(&self) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
         self.classes.iter().filter_map(|c| {
             let m = &self.markers[&c.cpp];
-            m.generated
-                .then_some((m.name.as_str(), c.cpp.as_str(), c.header.as_deref()))
+            (m.generated || m.shared).then_some((
+                m.name.as_str(),
+                c.cpp.as_str(),
+                c.header.as_deref(),
+            ))
         })
     }
 
@@ -899,7 +1131,7 @@ pub fn resolve(
                 return Ok(Bindings::default());
             };
             return Err(vec![format!(
-                "{}: the crate uses engine classes or types, but there is no reflection data yet. Enable the Ferreal plugin and build the Unreal project: Unreal Header Tool exports the data during that build, and the next build generates the bindings ({NEEDS_METADATA}). Outside Unreal builds, commit the {} that build writes, or set {METADATA_ENV} to the exporter's FerrealEngine.json.",
+                "{}: the crate uses engine classes or types, but there is no reflection data yet. Build the Unreal project: Ferreal's exporter (beside the module) exports the data during that build, and builds the crate again with it ({NEEDS_METADATA}). Outside Unreal builds, commit the {} that build writes, or set {METADATA_ENV} to the exporter's FerrealEngine.json.",
                 first.at, LOCK_FILE
             )]);
         }
@@ -956,7 +1188,7 @@ pub fn resolve(
             ));
         } else {
             errors.push(format!(
-                "{}: {} is not in {LOCK_FILE} yet: build the Unreal project with the Ferreal plugin enabled to export it ({NEEDS_METADATA})",
+                "{}: {} is not in {LOCK_FILE} yet: build the Unreal project to export it ({NEEDS_METADATA})",
                 r.at, r.cpp
             ));
         }
@@ -1012,6 +1244,9 @@ pub fn resolve(
             }
         }
     }
+    for (slot, f) in functions.iter_mut().enumerate() {
+        f.slot = Some(slot);
+    }
     for h in handles {
         if classes.contains_key(h.cpp.as_str()) {
             needed.extend(ancestors(&h.cpp));
@@ -1039,7 +1274,7 @@ pub fn resolve(
             ));
         } else {
             errors.push(format!(
-                "{}: {} is not in {LOCK_FILE} yet: build the Unreal project with the Ferreal plugin enabled to export it ({NEEDS_METADATA})",
+                "{}: {} is not in {LOCK_FILE} yet: build the Unreal project to export it ({NEEDS_METADATA})",
                 n.at, n.cpp
             ));
         }
@@ -1092,11 +1327,13 @@ pub fn resolve(
                 path: h.rust_path.clone(),
                 name,
                 generated: false,
+                shared: false,
             },
             None => Marker {
                 path: name.clone(),
                 name,
                 generated: true,
+                shared: false,
             },
         };
         markers.insert(cpp.clone(), marker);
@@ -1131,9 +1368,10 @@ pub fn resolve(
         .collect();
     ordered.sort_by_key(|c| (ancestors(&c.cpp).len(), c.cpp.clone()));
 
-    let lock = Metadata {
+    let mut lock = Metadata {
         format: FORMAT.into(),
         version: FORMAT_VERSION,
+        modules: Vec::new(),
         classes: ordered
             .iter()
             .map(|c| {
@@ -1151,6 +1389,33 @@ pub fn resolve(
             .collect(),
         enums: enum_list.clone(),
     };
+    // The modules of what the crate uses: those its module depends on.
+    let used: BTreeSet<&str> = lock
+        .classes
+        .iter()
+        .map(|c| c.module.as_str())
+        .chain(lock.structs.iter().map(|s| s.module.as_str()))
+        // An enum's module is in its path (`/Script/Engine.EDrawDebugTrace`).
+        .chain(lock.enums.iter().filter_map(|e| {
+            e.path
+                .strip_prefix("/Script/")
+                .and_then(|p| p.split('.').next())
+        }))
+        .filter(|m| !m.is_empty())
+        .collect();
+    lock.modules = used
+        .iter()
+        .map(|m| {
+            meta.modules
+                .iter()
+                .find(|x| x.name == *m)
+                .cloned()
+                .unwrap_or_else(|| ModuleMeta {
+                    name: m.to_string(),
+                    plugin: None,
+                })
+        })
+        .collect();
     for c in &mut ordered {
         if !bound.contains(&c.cpp) {
             c.functions.clear();
@@ -1161,9 +1426,14 @@ pub fn resolve(
         classes: ordered,
         functions,
         enums: enum_list,
+        cpp_structs: structs.iter().map(|p| p.meta.cpp.clone()).collect(),
         structs,
         struct_names,
         named_enums,
+        named_structs: named_structs.into_iter().collect(),
+        shared_roots: Vec::new(),
+        shared_structs: BTreeSet::new(),
+        shared_enums: BTreeMap::new(),
         bound_classes: bound
             .into_iter()
             .filter(|c| !own.contains(c.as_str()))
@@ -1249,6 +1519,7 @@ fn bind(class: &ClassMeta, f: &FunctionMeta, types: &mut Types<'_>) -> Result<Bo
         rust: method_name(&f.cpp),
         params,
         ret,
+        slot: None,
     })
 }
 
@@ -1694,6 +1965,9 @@ impl PTy {
 }
 
 fn enum_rust_name(b: &Bindings, cpp: &str) -> String {
+    if let Some(name) = b.shared_enums.get(cpp) {
+        return name.clone();
+    }
     let bare = cpp
         .strip_prefix('E')
         .filter(|r| r.starts_with(|c: char| c.is_uppercase()))
@@ -1715,9 +1989,15 @@ impl Bindings {
         if self.classes.is_empty() && self.structs.is_empty() && self.enums.is_empty() {
             return o;
         }
-        if !self.functions.is_empty() {
+        for root in &self.shared_roots {
+            let _ = writeln!(
+                o,
+                "\n// The shared types of {root}.\n#[allow(unused_imports)]\npub use {root}::*;"
+            );
+        }
+        if self.has_thunks() {
             o.push_str("\n#[doc(hidden)]\n#[repr(C)]\npub struct EngineTable {\n");
-            for (i, f) in self.functions.iter().enumerate() {
+            for (i, f) in self.generated() {
                 let mut args = vec!["::ferreal::ffi::RawObj".to_string()];
                 for p in &f.params {
                     if p.dir != Dir::Out {
@@ -1751,7 +2031,11 @@ impl Bindings {
         }
 
         // Enums.
-        for e in &self.enums {
+        for e in self
+            .enums
+            .iter()
+            .filter(|e| !self.shared_enums.contains_key(&e.cpp))
+        {
             let name = enum_rust_name(self, &e.cpp);
             o.push('\n');
             let _ = writeln!(o, "/// `{}` (`{}`).", e.cpp, e.path);
@@ -1787,7 +2071,9 @@ impl Bindings {
 
         // Structs.
         for p in &self.structs {
-            self.rust_struct(&mut o, p);
+            if !self.shared_structs.contains(&p.meta.cpp) {
+                self.rust_struct(&mut o, p);
+            }
         }
 
         // Classes.
@@ -1809,30 +2095,27 @@ impl Bindings {
                     "#[doc(alias = {:?})]\npub enum {marker} {{}}\n\nimpl ::ferreal::Class for {marker} {{\n    const CPP: &'static str = {:?};\n}}",
                     c.cpp, c.cpp
                 );
+            } else if m.shared {
+                let _ = writeln!(o, "// `{}` (`{}`): the shared {marker}.", c.cpp, c.path);
             } else {
                 let _ = writeln!(o, "// `{}` (`{}`): the crate's {marker}.", c.cpp, c.path);
             }
-            for a in self.ancestors(&c.cpp) {
-                let _ = writeln!(
-                    o,
-                    "impl ::ferreal::IsA<{}> for {marker} {{}}",
-                    self.path(&a)
-                );
+            // A shared marker's are its crate's.
+            for a in self.ancestors(&c.cpp).iter().filter(|_| !m.shared) {
+                let _ = writeln!(o, "impl ::ferreal::IsA<{}> for {marker} {{}}", self.path(a));
             }
             if !self.bound_classes.contains(&c.cpp) {
                 continue;
             }
-            let instance: Vec<(usize, &Bound)> = self
+            let instance: Vec<&Bound> = self
                 .functions
                 .iter()
-                .enumerate()
-                .filter(|(_, f)| f.class == c.cpp && !f.function.is_static)
+                .filter(|f| f.class == c.cpp && !f.function.is_static)
                 .collect();
-            let statics: Vec<(usize, &Bound)> = self
+            let statics: Vec<&Bound> = self
                 .functions
                 .iter()
-                .enumerate()
-                .filter(|(_, f)| f.class == c.cpp && f.function.is_static)
+                .filter(|f| f.class == c.cpp && f.function.is_static)
                 .collect();
             if !instance.is_empty() {
                 let _ = writeln!(
@@ -1840,22 +2123,33 @@ impl Bindings {
                     "\n/// The functions of `{}` (and of the classes deriving from it).\npub trait {name}Api: ::ferreal::AsObject {{",
                     c.cpp
                 );
-                for (i, f) in &instance {
-                    self.rust_function(&mut o, *i, f, true);
+                for f in &instance {
+                    self.rust_function(&mut o, f, true, true);
                 }
                 let _ = writeln!(
                     o,
                     "}}\n\nimpl<T: ::ferreal::AsObject + ::ferreal::IsA<{marker}>> {name}Api for T {{}}"
                 );
             }
-            if !statics.is_empty() {
+            // On the marker; a shared one's are a trait of this crate's (`<Name>Statics`).
+            if !statics.is_empty() && m.shared {
+                let _ = writeln!(
+                    o,
+                    "\n/// The static functions of `{}` (the shared marker's, from this crate).\npub trait {name}Statics {{",
+                    c.cpp
+                );
+                for f in &statics {
+                    self.rust_function(&mut o, f, false, true);
+                }
+                let _ = writeln!(o, "}}\n\nimpl {name}Statics for {marker} {{}}");
+            } else if !statics.is_empty() {
                 let _ = writeln!(
                     o,
                     "\n/// The static functions of `{}`.\nimpl {marker} {{",
                     c.cpp
                 );
-                for (i, f) in &statics {
-                    self.rust_function(&mut o, *i, f, false);
+                for f in &statics {
+                    self.rust_function(&mut o, f, false, false);
                 }
                 o.push_str("}\n");
             }
@@ -2007,7 +2301,7 @@ impl Bindings {
             .iter()
             .filter(|e| self.named_enums.contains(&e.cpp))
             .filter_map(|e| e.header.as_deref());
-        let classes = self.structs.iter().flat_map(|p| {
+        let classes = self.structs_in_cpp().flat_map(|p| {
             p.fields.iter().filter_map(|f| {
                 let c = match &f.ty {
                     PTy::Obj(c) | PTy::Weak(c) => c.as_str(),
@@ -2020,8 +2314,7 @@ impl Bindings {
                     .and_then(|m| m.header.as_deref())
             })
         });
-        self.structs
-            .iter()
+        self.structs_in_cpp()
             .filter_map(|p| p.meta.header.as_deref())
             .chain(classes)
             .chain(enums)
@@ -2049,7 +2342,7 @@ impl Bindings {
         out
     }
 
-    fn rust_function(&self, o: &mut String, index: usize, f: &Bound, instance: bool) {
+    fn rust_function(&self, o: &mut String, f: &Bound, instance: bool, in_trait: bool) {
         let fm = &f.function;
         o.push('\n');
         let _ = writeln!(o, "    /// `{}::{}`", f.class, fm.cpp);
@@ -2113,13 +2406,31 @@ impl Bindings {
         } else {
             format!("<{}>", generics.join(", "))
         };
-        let vis = if instance { "" } else { "pub " };
+        let vis = if in_trait { "" } else { "pub " };
         let _ = writeln!(
             o,
             "    {vis}fn {}{generics}({}){ret} {{",
             f.rust,
             params.join(", ")
         );
+        let Some(index) = f.slot else {
+            let inputs: Vec<&str> = f
+                .params
+                .iter()
+                .filter(|p| p.dir != Dir::Out)
+                .map(|p| p.rust.as_str())
+                .collect();
+            if !inputs.is_empty() {
+                let _ = writeln!(o, "        let _ = ({},);", inputs.join(", "));
+            }
+            let _ = writeln!(
+                o,
+                "        ::ferreal::ffi::not_generated({:?}, {:?})\n    }}",
+                format!("{}::{}", f.class, fm.cpp),
+                f.rust
+            );
+            return;
+        };
         let mut args = vec![if instance {
             "::ferreal::AsObject::raw_object(self)".to_string()
         } else {
@@ -2232,20 +2543,42 @@ impl Bindings {
 
     /// The C++ the module's `.cpp` needs: declarations (in `Ferreal::<M>::Detail`), the
     /// thunks and the table (in the same namespace).
-    pub fn cpp_table_type(&self) -> String {
+    pub fn cpp_engine_decls(&self) -> String {
         let mut o = String::from("\n\tstruct FEngineTable\n\t{\n");
-        for (i, f) in self.functions.iter().enumerate() {
-            let args = cpp_args(f);
-            let ret = cpp_ret(f);
-            let _ = writeln!(o, "\t\t{ret} (*F{i})({});", args.join(", "));
+        for (i, f) in self.generated() {
+            let _ = writeln!(o, "\t\t{} (*F{i})({});", cpp_ret(f), cpp_args(f).join(", "));
         }
-        o.push_str("\t};\n");
+        o.push_str("\t};\n\n");
+        for (_, f) in self.generated() {
+            let _ = writeln!(
+                o,
+                "\t{} Engine_{}({});",
+                cpp_ret(f),
+                f.id(),
+                cpp_args(f).join(", ")
+            );
+        }
+        o.push_str("\n\tvoid RegisterEngine();\n");
         o
     }
 
-    pub fn cpp_thunks(&self) -> String {
+    /// The table of thunks (`Ferreal<M>Engine.cpp`).
+    pub fn cpp_engine_table(&self) -> String {
+        let entries: Vec<String> = self
+            .generated()
+            .map(|(_, f)| format!("&Engine_{}", f.id()))
+            .collect();
+        format!(
+            "static const FEngineTable EngineTable = {{\n\t\t\t{}\n\t\t}};",
+            entries.join(",\n\t\t\t")
+        )
+    }
+
+    /// The thunks of class `class` (`Ferreal<M>Engine_<Class>.cpp`).
+    pub fn cpp_thunks(&self, class: &str) -> String {
         let mut o = String::new();
-        for (i, f) in self.functions.iter().enumerate() {
+        for (_, f) in self.generated().filter(|(_, f)| f.class == class) {
+            let i = f.id();
             let fm = &f.function;
             let class_path = &self
                 .classes
@@ -2255,7 +2588,7 @@ impl Bindings {
                 .path;
             let _ = writeln!(
                 o,
-                "\n\t// {}::{}\n\tstruct FEngineParms{i}\n\t{{",
+                "\n\t// {}::{}\n\tstruct FEngineParms_{i}\n\t{{",
                 f.class, fm.cpp
             );
             // Each member value-initialized directly: `Parms{}` alone would copy-initialize
@@ -2300,7 +2633,7 @@ impl Bindings {
             });
             let _ = writeln!(
                 o,
-                "\n\tstatic {ret} Engine{i}({})\n\t{{\n\t\tstatic Ferreal::FEngineFunction Function(TEXT(\"{class_path}\"), TEXT(\"{}\"), {});\n\t\tFEngineParms{i} Parms{{}};\n\t\tif (!Function.Ready([&] {{ return Ferreal::FEngineLayout{{static_cast<int32>(sizeof(Parms)), {{{}}}}}; }}))\n\t\t{{\n{fail}\n\t\t}}",
+                "\n\t{ret} Engine_{i}({})\n\t{{\n\t\tstatic Ferreal::FEngineFunction Function(TEXT(\"{class_path}\"), TEXT(\"{}\"), {});\n\t\tFEngineParms_{i} Parms{{}};\n\t\tif (!Function.Ready([&] {{ return Ferreal::FEngineLayout{{static_cast<int32>(sizeof(Parms)), {{{}}}}}; }}))\n\t\t{{\n{fail}\n\t\t}}",
                 args.join(", "),
                 fm.name,
                 if fm.is_static { "true" } else { "false" },
@@ -2336,14 +2669,6 @@ impl Bindings {
             }
             o.push_str("\t}\n");
         }
-        let entries: Vec<String> = (0..self.functions.len())
-            .map(|i| format!("&Engine{i}"))
-            .collect();
-        let _ = writeln!(
-            o,
-            "\n\tstatic const FEngineTable EngineTable = {{{}}};",
-            entries.join(", ")
-        );
         o
     }
 
@@ -2457,6 +2782,7 @@ mod tests {
             classes: vec![object, actor, spinner],
             structs: vec![],
             enums: vec![],
+            modules: vec![],
         }
     }
 
@@ -2489,13 +2815,30 @@ mod tests {
         assert!(rust.contains(
             "fn set_actor_location(&self, new_location: ::ferreal::Vector3) -> ::ferreal::Vector3"
         ));
-        let cpp = b.cpp_thunks();
+        let cpp = b.cpp_thunks("AActor");
+        assert!(cpp.contains("Engine_AActor_GetOwner(void* Object)"));
         assert!(cpp.contains("bool bNewHidden{};"));
         assert!(cpp.contains("UObject* ReturnValue{};"));
         assert!(cpp.contains("Ferreal::FVec3* OutSweepHitResult"));
         assert!(cpp.contains("*OutSweepHitResult = Ferreal::ToVec3(Parms.SweepHitResult);"));
         assert!(cpp.contains("TEXT(\"/Script/Engine.Actor\"), TEXT(\"GetOwner\"), false"));
         assert!(b.lock_json().contains("\"SetActorHiddenInGame\""));
+
+        // Only the functions the crate calls get C++; the others keep their Rust.
+        let mut b = b;
+        b.keep_used(&["get_owner".to_string()].into());
+        assert_eq!(b.thunk_classes(), ["AActor"]);
+        let cpp = b.cpp_thunks("AActor");
+        assert!(cpp.contains("Engine_AActor_GetOwner") && !cpp.contains("SetActorHiddenInGame"));
+        assert!(b.cpp_engine_decls().contains("(*F0)(void* Object)"));
+        assert!(b.cpp_engine_table().contains("&Engine_AActor_GetOwner"));
+        let rust = b.rust("ferreal_Hello_engine_register");
+        assert!(rust.contains("(ENGINE.get().f0)"));
+        assert!(rust.contains(
+            "::ferreal::ffi::not_generated(\"AActor::SetActorHiddenInGame\", \"set_actor_hidden_in_game\")"
+        ));
+        b.keep_used(&Default::default());
+        assert!(!b.has_thunks() && !b.rust("r").contains("EngineTable"));
     }
 
     #[test]
@@ -2560,7 +2903,7 @@ mod tests {
         assert!(rust.contains("pub actor: ::core::option::Option<::ferreal::Obj<Actor>>,"));
         assert!(rust.contains("/// - `FaceIndex`: not public"));
         assert!(rust.contains("fn last_hit(&self, previous: &HitResult) -> HitResult"));
-        let cpp = b.cpp_structs() + &b.cpp_table_type() + &b.cpp_thunks();
+        let cpp = b.cpp_structs() + &b.cpp_engine_decls() + &b.cpp_thunks("AActor");
         assert!(
             cpp.contains("C.Actor = Ferreal::ToObj(V.Actor.Get());"),
             "{cpp}"
@@ -2590,6 +2933,58 @@ mod tests {
         let e = resolve(&Source::Lock(sample()), &req, &[], &[]).unwrap_err();
         assert!(e[0].contains(NEEDS_METADATA));
         assert!(resolve(&Source::None, &[], &[], &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn shares_types() {
+        let req = [Request {
+            cpp: "AActor".into(),
+            at: "src/lib.rs:3".into(),
+        }];
+        // A crate of shared types: the markers, no functions.
+        let mut types = resolve(&Source::Exported(sample()), &req, &[], &[]).unwrap();
+        types.types_only();
+        let rust = types.rust("");
+        assert!(rust.contains("pub enum Actor {}") && !rust.contains("ActorApi"));
+        let shared = types.shared("::types::engine");
+        assert_eq!(shared.classes["AActor"], "Actor");
+
+        // A crate using them: its functions, on their markers.
+        let mut b = resolve(&Source::Exported(sample()), &req, &[], &[]).unwrap();
+        b.share(std::slice::from_ref(&shared)).unwrap();
+        let rust = b.rust("r");
+        assert!(rust.contains("pub use ::types::engine::*;"));
+        assert!(!rust.contains("pub enum Actor {}") && !rust.contains("IsA<Object> for Actor"));
+        assert!(rust.contains("pub trait ActorApi") && rust.contains("for T {}"));
+
+        // A struct both copy must be copied the same way.
+        let mut m = sample();
+        m.structs.push(StructMeta {
+            cpp: "FHit".into(),
+            fields: vec![FieldMeta {
+                name: "Time".into(),
+                ty: ty("float", "FloatProperty"),
+                is_public: true,
+                ..FieldMeta::default()
+            }],
+            ..StructMeta::default()
+        });
+        let mut hit = ty("struct", "StructProperty");
+        hit.strukt = Some("FHit".into());
+        m.classes[1].functions.push(FunctionMeta {
+            cpp: "LastHit".into(),
+            name: "LastHit".into(),
+            params: vec![ParamMeta {
+                ret: true,
+                ..param("ReturnValue", hit)
+            }],
+            ..FunctionMeta::default()
+        });
+        let mut b = resolve(&Source::Exported(m.clone()), &req, &[], &[]).unwrap();
+        let mut theirs = b.shared("::types::engine");
+        theirs.structs.get_mut("FHit").unwrap().layout = "Time:F64".into();
+        let e = b.share(&[theirs]).unwrap_err();
+        assert!(e[0].contains("FHit: ::types::engine copies it differently"));
     }
 
     #[test]

@@ -27,6 +27,15 @@ version = "0.1.0"
 dependencies = [
  "ferreal",
  "ferreal-build",
+ "ferreal-hello-types",
+]
+
+[[package]]
+name = "ferreal-hello-types"
+version = "0.1.0"
+dependencies = [
+ "ferreal",
+ "ferreal-build",
 ]
 
 [[package]]

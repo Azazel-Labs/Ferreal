@@ -1,0 +1,27 @@
+[package]
+name = "ferreal-sample"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "The example game's orbs, in Rust: built into the FerrealSample plugin's module"
+
+[lib]
+# The Unreal module links the static library.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+ferreal = { path = "../../../../../ferreal" }
+
+[build-dependencies]
+ferreal-build = { path = "../../../../../ferreal-build" }
+
+# The plugin's own workspace: it builds against the engine it is built in, apart from the
+# repository's (whose tests build against the mock engine).
+[workspace]
+
+# The profile the Build.cs passes: optimized, with unwinding, so a panic in Rust is caught at
+# the FFI boundary and logged instead of taking the game down.
+[profile.unreal]
+inherits = "release"
+panic = "unwind"
+debug = "line-tables-only"

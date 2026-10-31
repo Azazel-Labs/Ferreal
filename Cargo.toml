@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["ferreal", "ferreal-model", "ferreal-macros", "ferreal-build", "examples/hello/rust", "xtask"]
+members = ["ferreal", "ferreal-model", "ferreal-macros", "ferreal-build", "tests/hello/rust", "tests/hello/types", "xtask"]
+# The example game's Rust plugin: a workspace of its own, built by its Unreal module against
+# the engine it is built in.
+exclude = ["examples/UnrealGame/Plugins/FerrealSample/Rust"]
 
 [workspace.package]
 version = "0.1.0"

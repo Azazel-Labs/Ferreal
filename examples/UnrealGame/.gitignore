@@ -1,0 +1,2 @@
+# Content, though the root's cargo target/ matches (git ignores case on Windows).
+!/Content/**/Target/

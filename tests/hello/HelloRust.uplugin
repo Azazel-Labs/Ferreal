@@ -1,0 +1,16 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Hello Rust (Ferreal's tests)",
+	"Description": "A UCLASS written in Rust with Ferreal: what Ferreal's tests build.",
+	"Category": "Programming",
+	"CanContainContent": false,
+	"Modules": [
+		{
+			"Name": "HelloRust",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

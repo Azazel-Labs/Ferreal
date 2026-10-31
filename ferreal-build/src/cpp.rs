@@ -19,6 +19,33 @@ struct ClassRef {
     /// The header to include: an engine class' own, `Ferreal/<Name>.h` for a generated one.
     include: Option<String>,
     generated: bool,
+    /// An engine class of the bindings (`ferreal::engine!`): without the reflection data (no
+    /// `include`), declared ahead in the headers, which include it once there is.
+    engine: bool,
+}
+
+/// The classes `ferreal::engine!` names, with the names of their markers as the bindings give
+/// them (the C++ name without its prefix, unless two would share it): what the headers need of
+/// them, which the reflection data is not needed for.
+fn listed_markers(model: &Collected) -> Vec<(String, String)> {
+    let listed: BTreeSet<String> = model
+        .engine_lists
+        .iter()
+        .flat_map(|l| l.item.classes.iter().map(|c| c.to_string()))
+        .collect();
+    let mut taken = BTreeSet::new();
+    listed
+        .into_iter()
+        .map(|cpp| {
+            let bare = cpp.get(1..).unwrap_or(&cpp).to_string();
+            let name = if taken.insert(bare.clone()) {
+                bare
+            } else {
+                cpp.clone()
+            };
+            (name, cpp)
+        })
+        .collect()
 }
 
 /// A generated file: its path under the module directory and contents.
@@ -36,6 +63,12 @@ pub struct Gen<'a> {
     enums: HashMap<&'a str, &'a Enum>,
     classes: HashMap<String, ClassRef>,
     engine: &'a Bindings,
+    /// Without the reflection data (`engine` is empty): the `cpp!` blocks, which may pass the
+    /// engine's types, are left out (Ferreal's exporter writes them later in the build).
+    without_data: bool,
+    /// The crate depends on crates of shared engine types: it may call their classes'
+    /// functions, whether or not it names classes itself.
+    shares_types: bool,
 }
 
 /// How a parameter is declared in C++.
@@ -134,7 +167,19 @@ impl<'a> Gen<'a> {
     ) -> Self {
         let mut classes = HashMap::new();
         // The engine bindings' markers (`Obj<engine::Actor>`), unless the crate declares a
-        // class of the same name.
+        // class of the same name: those of the classes `ferreal::engine!` names even without
+        // the reflection data, and with it, their headers and the others'.
+        for (name, cpp) in listed_markers(model) {
+            classes.insert(
+                name,
+                ClassRef {
+                    cpp,
+                    include: None,
+                    generated: false,
+                    engine: true,
+                },
+            );
+        }
         for (name, cpp, header) in engine.marker_classes() {
             classes.insert(
                 name.to_string(),
@@ -142,6 +187,7 @@ impl<'a> Gen<'a> {
                     cpp: cpp.to_string(),
                     include: header.map(str::to_string),
                     generated: false,
+                    engine: true,
                 },
             );
         }
@@ -152,6 +198,7 @@ impl<'a> Gen<'a> {
                     cpp: e.decl.cpp_class.clone(),
                     include: e.decl.include.clone(),
                     generated: false,
+                    engine: false,
                 },
             );
         }
@@ -162,6 +209,7 @@ impl<'a> Gen<'a> {
                     cpp: c.class.cpp_name.clone(),
                     include: Some(format!("Ferreal/{}", header_name(&c.class.cpp_name))),
                     generated: true,
+                    engine: false,
                 },
             );
         }
@@ -179,7 +227,21 @@ impl<'a> Gen<'a> {
             enums,
             classes,
             engine,
+            without_data: false,
+            shares_types: false,
         }
+    }
+
+    /// See the field.
+    pub fn without_data(mut self, without_data: bool) -> Self {
+        self.without_data = without_data;
+        self
+    }
+
+    /// See the field.
+    pub fn shares_types(mut self, shares_types: bool) -> Self {
+        self.shares_types = shares_types;
+        self
     }
 
     fn class(&self, name: &str) -> &ClassRef {
@@ -379,17 +441,195 @@ impl<'a> Gen<'a> {
                 contents: self.class_header(&c.class)?,
             });
         }
-        if !self.engine.is_empty() {
-            files.push(File {
-                path: "Private/Ferreal/FerrealEngine.h".into(),
-                contents: include_str!("FerrealEngine.h").into(),
-            });
-        }
         files.push(File {
             path: format!("Private/Ferreal/Ferreal{}.cpp", self.module),
             contents: self.implementation()?,
         });
+        // Apart, so that a change recompiles only its part: the `cpp!` blocks, and the engine
+        // bindings' thunks by class.
+        if !self.model.cpp_blocks.is_empty() {
+            files.push(File {
+                path: format!("Private/Ferreal/Ferreal{}Cpp.cpp", self.module),
+                contents: if self.without_data {
+                    self.uncalled_file("the blocks are written once Unreal has exported the reflection data they may pass")
+                } else {
+                    self.cpp_blocks_file()
+                },
+            });
+        }
+        // The engine bindings' files: those of every class `ferreal::engine!` names, whether the
+        // crate calls its functions or not, so that which files there are does not depend on
+        // the reflection data. A build without the data writes them all, and Ferreal's exporter
+        // fills them in later in the same Unreal build, after Unreal Build Tool has listed them.
+        let named: Vec<String> = self
+            .model
+            .engine_lists
+            .iter()
+            .flat_map(|l| l.item.classes.iter().map(|c| c.to_string()))
+            .collect();
+        let thunks = self.engine.thunk_classes();
+        let uses_engine = !named.is_empty() || self.shares_types;
+        if self.engine.has_cpp() || uses_engine {
+            files.push(File {
+                path: format!("Private/Ferreal/{}.h", self.engine_header()),
+                contents: self.engine_header_file(),
+            });
+        }
+        if self.engine.has_thunks() || uses_engine {
+            // The thunks of the classes the crate does not name (those of crates of shared
+            // types) go in the table's file, which is always there.
+            let others: Vec<&str> = thunks
+                .iter()
+                .copied()
+                .filter(|c| !named.iter().any(|n| n == c))
+                .collect();
+            files.push(File {
+                path: "Private/Ferreal/FerrealEngine.h".into(),
+                contents: include_str!("FerrealEngine.h").into(),
+            });
+            files.push(File {
+                path: format!("Private/Ferreal/{}.cpp", self.engine_header()),
+                contents: if self.engine.has_thunks() {
+                    self.engine_table_file(&others)
+                } else {
+                    self.uncalled_file("the crate calls no engine function yet")
+                },
+            });
+            for class in named.iter().map(String::as_str) {
+                files.push(File {
+                    path: format!("Private/Ferreal/{}_{class}.cpp", self.engine_header()),
+                    contents: if thunks.contains(&class) {
+                        self.engine_class_file(class)
+                    } else {
+                        self.uncalled_file(&format!("the crate calls no function of {class} yet"))
+                    },
+                });
+            }
+        }
         Ok(files)
+    }
+
+    fn engine_header(&self) -> String {
+        format!("Ferreal{}Engine", self.module)
+    }
+
+    /// `Ferreal<M>Engine.h`: what the thunks and the `cpp!` blocks share of the engine
+    /// bindings (the structs' conversions, the table's type, the thunks' declarations).
+    fn engine_header_file(&self) -> String {
+        let m = self.module;
+        let mut o = self.banner();
+        o.push_str("\n#pragma once\n\n#include \"Ferreal/FerrealRuntime.h\"\n");
+        let includes: BTreeSet<&str> = self.engine.headers().collect();
+        for i in includes {
+            let _ = writeln!(o, "#include \"{i}\"");
+        }
+        if self.engine.has_thunks() {
+            o.push_str("#include \"FerrealEngine.h\"\n");
+        }
+        let _ = writeln!(o, "\nnamespace Ferreal::{m}::Detail\n{{");
+        o.push_str(&self.engine.cpp_structs());
+        if self.engine.has_thunks() {
+            o.push_str(&self.engine.cpp_engine_decls());
+        }
+        o.push_str("}\n");
+        o
+    }
+
+    /// `Ferreal<M>Engine.cpp`: the table of the thunks, handed to Rust.
+    /// `Ferreal<M>Engine.cpp`: the table of the thunks, and the thunks of `classes`.
+    fn engine_table_file(&self, classes: &[&str]) -> String {
+        let m = self.module;
+        let mut o = self.banner();
+        let _ = writeln!(
+            o,
+            "\n#include \"{}.h\"\n\nextern \"C\" void {}(const Ferreal::{m}::Detail::FEngineTable* Table);\n",
+            self.engine_header(),
+            self.symbols.register_engine()
+        );
+        let _ = writeln!(
+            o,
+            "void Ferreal::{m}::Detail::RegisterEngine()\n{{\n\t{}\n\t{}(&EngineTable);\n}}",
+            self.engine.cpp_engine_table().replace("\n\t\t", "\n\t"),
+            self.symbols.register_engine()
+        );
+        for class in classes {
+            let _ = writeln!(
+                o,
+                "\nnamespace Ferreal::{m}::Detail\n{{{}}}",
+                self.engine.cpp_thunks(class)
+            );
+        }
+        o
+    }
+
+    /// An engine bindings' file with nothing in it (`why`).
+    fn uncalled_file(&self, why: &str) -> String {
+        let mut o = self.banner();
+        let _ = writeln!(o, "\n// Empty: {why}.");
+        o
+    }
+
+    /// `Ferreal<M>Engine_<Class>.cpp`: the thunks of a class' functions the crate calls.
+    fn engine_class_file(&self, class: &str) -> String {
+        let m = self.module;
+        let mut o = self.banner();
+        let _ = writeln!(
+            o,
+            "\n#include \"{}.h\"\n\nnamespace Ferreal::{m}::Detail\n{{{}}}",
+            self.engine_header(),
+            self.engine.cpp_thunks(class)
+        );
+        o
+    }
+
+    /// `Ferreal<M>Cpp.cpp`: the `cpp!` blocks, with the headers they may use.
+    fn cpp_blocks_file(&self) -> String {
+        let m = self.module;
+        let mut o = self.banner();
+        let _ = writeln!(o, "\n#include \"Ferreal/Ferreal{m}.h\"");
+        for c in &self.model.classes {
+            let _ = writeln!(o, "#include \"Ferreal/{}\"", header_name(&c.class.cpp_name));
+        }
+        if self.engine.has_cpp() {
+            let _ = writeln!(o, "#include \"{}.h\"", self.engine_header());
+        }
+        let mut includes = self.crate_includes();
+        // The headers of the classes they pass, and those asked for.
+        for b in &self.model.cpp_blocks {
+            let types = b.block.captures.iter().map(|c| &c.param.ty);
+            for t in types.chain([&b.block.ret]) {
+                if let Some(c) = t.class()
+                    && let Some(i) = &self.class(c).include
+                {
+                    includes.insert(i.clone());
+                }
+            }
+        }
+        includes.extend(self.model.cpp_includes.iter().map(|i| i.item.clone()));
+        for i in &includes {
+            let _ = writeln!(o, "#include \"{i}\"");
+        }
+        let _ = writeln!(
+            o,
+            "\nnamespace Ferreal::{m}::Detail\n{{\n\tstruct FCppEntry\n\t{{\n\t\tuint64 Key;\n\t\tconst void* Function;\n\t}};\n\n\tvoid RegisterCpp();\n}}\n\nextern \"C\" void {}(const Ferreal::{m}::Detail::FCppEntry* Entries, size_t Count);\n",
+            self.symbols.register_cpp()
+        );
+        self.cpp_blocks(&mut o);
+        o
+    }
+
+    /// The headers of the C++ the crate names (`engine_class!`, `#[cpp_base]`).
+    fn crate_includes(&self) -> BTreeSet<String> {
+        let mut includes = BTreeSet::new();
+        for e in &self.model.engine {
+            if let Some(i) = &e.decl.include {
+                includes.insert(i.clone());
+            }
+        }
+        for b in &self.model.bases {
+            includes.extend(b.item.includes.iter().cloned());
+        }
+        includes
     }
 
     fn enums_header(&self) -> String {
@@ -447,6 +687,30 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+    }
+
+    /// The headers of the engine classes the crate's classes and exported functions pass,
+    /// which the headers only declare ahead: for the sources.
+    fn engine_includes(&self) -> BTreeSet<String> {
+        let classes = self.model.classes.iter().flat_map(|c| {
+            c.class.properties.iter().map(|p| &p.ty).chain(
+                self.impl_of(&c.class.name)
+                    .into_iter()
+                    .flat_map(|m| m.params.iter().map(|p| &p.ty).chain([&m.ret])),
+            )
+        });
+        let exports = self
+            .model
+            .exports
+            .iter()
+            .flat_map(|e| e.item.params.iter().map(|p| &p.ty).chain([&e.item.ret]));
+        classes
+            .chain(exports)
+            .filter_map(|ty| ty.class())
+            .map(|c| self.class(c))
+            .filter(|r| r.engine)
+            .filter_map(|r| r.include.clone())
+            .collect()
     }
 
     fn module_header(&self) -> String {
@@ -653,34 +917,8 @@ impl<'a> Gen<'a> {
         for c in &self.model.classes {
             let _ = writeln!(o, "#include \"Ferreal/{}\"", header_name(&c.class.cpp_name));
         }
-        let mut includes = BTreeSet::new();
-        for e in &self.model.engine {
-            if let Some(i) = &e.decl.include {
-                includes.insert(i.clone());
-            }
-        }
-        for b in &self.model.bases {
-            includes.extend(b.item.includes.iter().cloned());
-        }
-        // `cpp!` blocks: the headers of the classes they pass, and those asked for.
-        for b in &self.model.cpp_blocks {
-            let types = b.block.captures.iter().map(|c| &c.param.ty);
-            for t in types.chain([&b.block.ret]) {
-                if let Some(c) = t.class()
-                    && let Some(i) = &self.class(c).include
-                {
-                    includes.insert(i.clone());
-                }
-            }
-        }
-        includes.extend(self.model.cpp_includes.iter().map(|i| i.item.clone()));
-        // The structs the engine bindings copy.
-        includes.extend(self.engine.headers().map(str::to_string));
-        for i in &includes {
+        for i in self.crate_includes().union(&self.engine_includes()) {
             let _ = writeln!(o, "#include \"{i}\"");
-        }
-        if !self.engine.is_empty() {
-            o.push_str("#include \"FerrealEngine.h\"\n");
         }
         let _ = writeln!(
             o,
@@ -730,14 +968,12 @@ impl<'a> Gen<'a> {
             }
             o.push_str("\t};\n");
         }
-        o.push_str(&self.engine.cpp_structs());
-        if !self.engine.is_empty() {
-            o.push_str(&self.engine.cpp_table_type());
+        // The parts in files of their own register themselves.
+        if self.engine.has_thunks() {
+            o.push_str("\n\tvoid RegisterEngine();\n");
         }
         if !self.model.cpp_blocks.is_empty() {
-            o.push_str(
-                "\n\tstruct FCppEntry\n\t{\n\t\tuint64 Key;\n\t\tconst void* Function;\n\t};\n",
-            );
+            o.push_str("\n\tvoid RegisterCpp();\n");
         }
         o.push_str("}\n\n");
 
@@ -796,20 +1032,6 @@ impl<'a> Gen<'a> {
                 "\tvoid {}(const Ferreal::{m}::Detail::FBaseTable_{}* Table);",
                 s.register_base(&b.name),
                 b.name
-            );
-        }
-        if !self.engine.is_empty() {
-            let _ = writeln!(
-                o,
-                "\tvoid {}(const Ferreal::{m}::Detail::FEngineTable* Table);",
-                s.register_engine()
-            );
-        }
-        if !self.model.cpp_blocks.is_empty() {
-            let _ = writeln!(
-                o,
-                "\tvoid {}(const Ferreal::{m}::Detail::FCppEntry* Entries, size_t Count);",
-                s.register_cpp()
             );
         }
         for e in &self.model.exports {
@@ -893,15 +1115,7 @@ impl<'a> Gen<'a> {
         for b in &self.model.bases {
             self.base_thunks(&mut o, &b.item);
         }
-        if !self.engine.is_empty() {
-            o.push_str(&self.engine.cpp_thunks());
-        }
         o.push_str("}\n\n");
-
-        // `cpp!` blocks, in a namespace of their own (their C++ sees the global names).
-        if !self.model.cpp_blocks.is_empty() {
-            self.cpp_blocks(&mut o);
-        }
 
         // Registration.
         let _ = writeln!(
@@ -929,15 +1143,11 @@ impl<'a> Gen<'a> {
                 b.item.name
             );
         }
-        if !self.engine.is_empty() {
-            let _ = writeln!(o, "\t\t{}(&Detail::EngineTable);", s.register_engine());
+        if self.engine.has_thunks() {
+            o.push_str("\t\tDetail::RegisterEngine();\n");
         }
         if !self.model.cpp_blocks.is_empty() {
-            let _ = writeln!(
-                o,
-                "\t\t{}(FerrealCpp{m}::Entries, sizeof(FerrealCpp{m}::Entries) / sizeof(FerrealCpp{m}::Entries[0]));",
-                s.register_cpp()
-            );
+            o.push_str("\t\tDetail::RegisterCpp();\n");
         }
         o.push_str("\t\treturn true;\n\t}();\n\t(void)bRegistered;\n}\n");
 
@@ -1068,13 +1278,16 @@ impl<'a> Gen<'a> {
             .keys()
             .map(|k| {
                 let name = ferreal_model::cpp::key_name(*k);
-                format!("{{0x{name}ull, reinterpret_cast<const void*>(&Cpp_{name})}}")
+                format!(
+                    "{{0x{name}ull, reinterpret_cast<const void*>(&FerrealCpp{m}::Cpp_{name})}}"
+                )
             })
             .collect();
         let _ = writeln!(
             o,
-            "\tstatic const Ferreal::{m}::Detail::FCppEntry Entries[] = {{\n\t\t{}\n\t}};\n}}\n",
-            entries.join(",\n\t\t")
+            "}}\n\nvoid Ferreal::{m}::Detail::RegisterCpp()\n{{\n\tstatic const FCppEntry Entries[] = {{\n\t\t{}\n\t}};\n\t{}(Entries, sizeof(Entries) / sizeof(Entries[0]));\n}}",
+            entries.join(",\n\t\t"),
+            self.symbols.register_cpp()
         );
     }
 
@@ -1242,9 +1455,24 @@ impl<'a> Gen<'a> {
 /// Checks that the C++ the model asks for can be written: referenced classes and enums are
 /// declared, nothing is declared twice.
 pub fn check(model: &Collected, engine: &Bindings) -> Vec<String> {
+    check_with(model, engine, true)
+}
+
+/// [`check`] without the reflection data: but for the `cpp!` blocks (which may pass the
+/// engine's types, and are not written without it).
+pub fn check_without_data(model: &Collected, engine: &Bindings) -> Vec<String> {
+    check_with(model, engine, false)
+}
+
+fn check_with(model: &Collected, engine: &Bindings, cpp_blocks: bool) -> Vec<String> {
     let mut errors = Vec::new();
     let mut classes: HashMap<String, &str> = HashMap::new();
-    let engine_markers: BTreeSet<&str> = engine.marker_classes().map(|(n, _, _)| n).collect();
+    let listed = listed_markers(model);
+    let engine_markers: BTreeSet<&str> = engine
+        .marker_classes()
+        .map(|(n, _, _)| n)
+        .chain(listed.iter().map(|(n, _)| n.as_str()))
+        .collect();
     for e in &model.engine {
         if classes
             .insert(e.decl.name.to_string(), "engine_class!")
@@ -1313,7 +1541,7 @@ pub fn check(model: &Collected, engine: &Bindings) -> Vec<String> {
             check_ty(t, &e.at, &mut errors);
         }
     }
-    for b in &model.cpp_blocks {
+    for b in model.cpp_blocks.iter().filter(|_| cpp_blocks) {
         let captures = b.block.captures.iter().map(|c| &c.param.ty);
         for t in captures.chain([&b.block.ret]) {
             // Types by name may be the engine's (resolved with the bindings).

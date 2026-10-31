@@ -525,7 +525,23 @@ pub fn generate(
     model: &Collected,
     bindings: &engine::Bindings,
 ) -> Result<Vec<GeneratedFile>, Error> {
-    let generator = cpp::Gen::new(module, api, source, model, bindings);
+    generate_with(module, api, source, model, bindings, false, false)
+}
+
+/// [`generate`]; `without_data`: the crate lacks the reflection data (`bindings` is empty);
+/// `shares_types`: it depends on crates of shared engine types.
+fn generate_with(
+    module: &str,
+    api: &str,
+    source: &str,
+    model: &Collected,
+    bindings: &engine::Bindings,
+    without_data: bool,
+    shares_types: bool,
+) -> Result<Vec<GeneratedFile>, Error> {
+    let generator = cpp::Gen::new(module, api, source, model, bindings)
+        .without_data(without_data)
+        .shares_types(shares_types);
     generator
         .files()
         .map(|files| {
@@ -607,6 +623,7 @@ impl Module {
         println!("cargo:rerun-if-env-changed={}", engine::METADATA_ENV);
         println!("cargo:rerun-if-env-changed={}", engine::LOCK_ENV);
         println!("cargo:rerun-if-env-changed={}", engine::OUTPUT_ENV);
+        println!("cargo:rerun-if-env-changed={}", engine::DEFERRED_ENV);
         let crate_dir =
             std::env::var_os("CARGO_MANIFEST_DIR").map_or_else(PathBuf::new, PathBuf::from);
         let root = crate_dir.join(&self.root);
@@ -616,16 +633,35 @@ impl Module {
             println!("cargo:rerun-if-changed={}", f.display());
         }
 
+        let output = std::env::var_os(engine::OUTPUT_ENV)
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| self.output.as_ref().map(|o| crate_dir.join(o)));
+        // The exporter first: the Unreal build it is part of exports the data the bindings
+        // need.
+        if let Some(output) = &output {
+            write_exporter(output, &self.name)
+                .map_err(|e| Error(vec![format!("{}: {e}", output.display())]))?;
+        }
+
         // The engine bindings. Without the data they need, the rest is still written (so the
         // Unreal build that exports the data can run), and the error reported after.
         let lock = match std::env::var_os(engine::LOCK_ENV).filter(|p| !p.is_empty()) {
             Some(p) => PathBuf::from(p),
             None => crate_dir.join(&self.lock),
         };
-        let (bindings, engine_errors) = match engine_bindings(&model, &lock) {
+        let (mut bindings, engine_errors) = match engine_bindings(&model, &lock) {
             Ok(b) => (b, Vec::new()),
             Err(e) => (engine::Bindings::default(), e),
         };
+        // The types of the crates of shared types it depends on are theirs.
+        let mut engine_errors = engine_errors;
+        let shared = shared_types()?;
+        if let Err(e) = bindings.share(&shared) {
+            engine_errors.extend(e);
+        }
+        // C++ only for the engine functions the crate calls.
+        bindings.keep_used(&identifiers(&model.files));
         let symbols = ferreal_model::Symbols::new(&self.name);
         if let Some(out_dir) = std::env::var_os("OUT_DIR") {
             let path = PathBuf::from(out_dir).join("ferreal_engine.rs");
@@ -634,32 +670,214 @@ impl Module {
         }
         // Without the bindings, items that mention engine classes cannot be written: leave
         // the C++ as the last build wrote it, and report what is missing.
-        let checked = check(&model, &bindings);
-        if engine_errors.is_empty() {
-            checked?;
-        } else if checked.is_err() {
-            return Err(Error(engine_errors));
+        let without_data = !engine_errors.is_empty();
+        if without_data {
+            if !cpp::check_without_data(&model, &bindings).is_empty() {
+                return Err(Error(engine_errors));
+            }
+        } else {
+            check(&model, &bindings)?;
         }
 
-        let output = std::env::var_os(engine::OUTPUT_ENV)
-            .filter(|p| !p.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| self.output.as_ref().map(|o| crate_dir.join(o)));
         if let Some(output) = &output {
             let api = self
                 .api
                 .clone()
                 .unwrap_or_else(|| format!("{}_API", self.name.to_uppercase()));
             let source = std::env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "the crate".into());
-            let files = generate(&self.name, &api, &source, &model, &bindings)?;
-            write_files(output, &files)
-                .map_err(|e| Error(vec![format!("{}: {e}", output.display())]))?;
+            let mut files = generate_with(
+                &self.name,
+                &api,
+                &source,
+                &model,
+                &bindings,
+                without_data,
+                !shared.is_empty(),
+            )?;
+            // What the module depends on, from the data (without it, the list stays as the
+            // last build wrote it): the modules of what the crate uses, for its Build.cs, and
+            // their plugins, in its plugin's .uplugin.
+            let mut plugin_modules: Vec<String> = Vec::new();
+            if !without_data {
+                let modules: Vec<&engine::ModuleMeta> = bindings
+                    .lock
+                    .modules
+                    .iter()
+                    .filter(|m| m.name != self.name)
+                    .collect();
+                if !modules.is_empty() {
+                    let mut text = String::from(
+                        "// Written by ferreal-build: the modules of the engine classes, structs and enums\n\
+                         // the crate uses, which the module's Build.cs depends on.\n",
+                    );
+                    for m in &modules {
+                        text.push_str(&m.name);
+                        text.push('\n');
+                    }
+                    files.push(GeneratedFile {
+                        path: MODULES_FILE.into(),
+                        contents: text,
+                    });
+                }
+                plugin_modules = modules
+                    .iter()
+                    .filter(|m| m.plugin.is_some())
+                    .map(|m| m.name.clone())
+                    .collect();
+                let plugins: Vec<String> =
+                    modules.iter().filter_map(|m| m.plugin.clone()).collect();
+                for added in
+                    add_plugin_dependencies(output, &plugins).map_err(|e| Error(vec![e]))?
+                {
+                    println!(
+                        "cargo:warning=ferreal: {added} is now in the plugin's Plugins (the crate uses its engine classes): build again if Unreal did not enable it for this build"
+                    );
+                }
+            }
+            let io = |e: std::io::Error| Error(vec![format!("{}: {e}", output.display())]);
+            if std::env::var_os(engine::DEFERRED_ENV).is_some_and(|v| v == "1") {
+                write_deferred(output, &files, &plugin_modules)?;
+            } else if engine_errors.is_empty() {
+                write_files(output, &files).map_err(io)?;
+            } else {
+                write_provisional(output, &files).map_err(io)?;
+            }
         }
         if engine_errors.is_empty() {
             Ok(())
         } else {
             Err(Error(engine_errors))
         }
+    }
+}
+
+/// The key of the metadata a crate of shared types hands the crates depending on it: the path
+/// of its manifest (they read `DEP_<links>_FERREAL_TYPES`).
+const SHARED_KEY: &str = "ferreal_types";
+
+/// The manifests of the crates of shared types this crate depends on.
+fn shared_types() -> Result<Vec<engine::Shared>, Error> {
+    let suffix = format!("_{}", SHARED_KEY.to_uppercase());
+    let mut shared = Vec::new();
+    let mut paths: Vec<(String, PathBuf)> = std::env::vars_os()
+        .filter_map(|(k, v)| {
+            let k = k.into_string().ok()?;
+            (k.starts_with("DEP_") && k.ends_with(&suffix)).then(|| (k, PathBuf::from(v)))
+        })
+        .collect();
+    paths.sort();
+    for (_, path) in paths {
+        println!("cargo:rerun-if-changed={}", path.display());
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| Error(vec![format!("{}: {e}", path.display())]))?;
+        shared.push(
+            serde_json::from_str(&text)
+                .map_err(|e| Error(vec![format!("{}: {e}", path.display())]))?,
+        );
+    }
+    Ok(shared)
+}
+
+/// The build script of a crate of engine types other crates share: its `ferreal::engine!`
+/// names classes, and it holds their types (`ferreal::engine_types!()` declares its `engine`
+/// module): the markers of the classes, the structs and enums their functions pass. It has no
+/// functions and no C++: each Unreal module's crate depending on it binds the functions it
+/// calls, with the shared types, which are then the same Rust types in every crate.
+///
+/// Its `Cargo.toml` has a `links` key (any name unique in the build: `links =
+/// "ferreal-types-mygame"`), through which cargo hands the crates depending on it what it
+/// holds.
+pub struct Types {
+    root: PathBuf,
+    lock: PathBuf,
+}
+
+impl Default for Types {
+    fn default() -> Self {
+        Types::new()
+    }
+}
+
+impl Types {
+    pub fn new() -> Self {
+        Types {
+            root: PathBuf::from("src/lib.rs"),
+            lock: PathBuf::from(engine::LOCK_FILE),
+        }
+    }
+
+    /// The crate root, relative to the crate (default `src/lib.rs`).
+    pub fn root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.root = root.into();
+        self
+    }
+
+    /// The lock file, relative to the crate (default `ferreal-engine.json`).
+    /// `FERREAL_ENGINE_LOCK`, if set, puts it next to that file, named after the crate.
+    pub fn engine_lock(mut self, path: impl Into<PathBuf>) -> Self {
+        self.lock = path.into();
+        self
+    }
+
+    /// Runs as a build script; panics with every problem found.
+    pub fn run(self) {
+        if let Err(e) = self.try_run() {
+            panic!("\n{e}");
+        }
+    }
+
+    /// [`Types::run`], returning the problems instead of panicking.
+    pub fn try_run(self) -> Result<(), Error> {
+        println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-env-changed={}", engine::METADATA_ENV);
+        println!("cargo:rerun-if-env-changed={}", engine::LOCK_ENV);
+        let name = std::env::var("CARGO_PKG_NAME").unwrap_or_default();
+        if std::env::var_os("CARGO_MANIFEST_LINKS").is_none() {
+            return Err(Error(vec![format!(
+                "{name}: a crate of shared engine types needs a `links` key in its Cargo.toml (`links = \"ferreal-types-{name}\"`): cargo hands the crates depending on it what it holds through it"
+            )]));
+        }
+        let crate_dir =
+            std::env::var_os("CARGO_MANIFEST_DIR").map_or_else(PathBuf::new, PathBuf::from);
+        let model = collect(&crate_dir.join(&self.root))?;
+        for f in &model.files {
+            println!("cargo:rerun-if-changed={}", f.display());
+        }
+        // Next to the overridden lock of the crates being built, apart from theirs.
+        let lock = match std::env::var_os(engine::LOCK_ENV).filter(|p| !p.is_empty()) {
+            Some(p) => PathBuf::from(p).with_file_name(format!("{name}.{}", engine::LOCK_FILE)),
+            None => crate_dir.join(&self.lock),
+        };
+        let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default());
+        let rust = out_dir.join("ferreal_engine.rs");
+        // Without the reflection data, the build script still succeeds, with no types to hand
+        // on, and the crate fails to compile instead: cargo then runs the build scripts of the
+        // crates depending on it, which write their C++ (Ferreal's exporter builds them all
+        // again once Unreal has exported the data).
+        let (bindings, rust_text) = match engine_bindings(&model, &lock) {
+            Ok(mut bindings) => {
+                bindings.types_only();
+                let text = bindings.rust("");
+                (bindings, text)
+            }
+            Err(errors) if errors.iter().all(|e| e.contains(engine::NEEDS_METADATA)) => {
+                let text = errors
+                    .iter()
+                    .map(|e| format!("compile_error!({e:?});\n"))
+                    .collect();
+                (engine::Bindings::default(), text)
+            }
+            Err(errors) => return Err(Error(errors)),
+        };
+        write_if_changed(&rust, &rust_text)
+            .map_err(|e| Error(vec![format!("{}: {e}", rust.display())]))?;
+        let manifest = out_dir.join("ferreal_types.json");
+        let shared = bindings.shared(&format!("::{}::engine", name.replace('-', "_")));
+        let text = serde_json::to_string_pretty(&shared).expect("serializable");
+        write_if_changed(&manifest, &text)
+            .map_err(|e| Error(vec![format!("{}: {e}", manifest.display())]))?;
+        println!("cargo:{SHARED_KEY}={}", manifest.display());
+        Ok(())
     }
 }
 
@@ -738,6 +956,57 @@ fn engine_bindings(model: &Collected, lock: &Path) -> Result<engine::Bindings, V
     Ok(bindings)
 }
 
+/// Every identifier in `files` (the crate's sources), in other macros' arguments too: what
+/// the crate can call. A file that does not tokenize contributes nothing (rustc reports it).
+fn identifiers(files: &[PathBuf]) -> std::collections::BTreeSet<String> {
+    fn walk(tokens: proc_macro2::TokenStream, out: &mut std::collections::BTreeSet<String>) {
+        for t in tokens {
+            match t {
+                proc_macro2::TokenTree::Ident(i) => {
+                    out.insert(i.to_string());
+                }
+                proc_macro2::TokenTree::Group(g) => walk(g.stream(), out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for f in files {
+        if let Ok(text) = std::fs::read_to_string(f)
+            && let Ok(tokens) = text.parse::<proc_macro2::TokenStream>()
+        {
+            walk(tokens, &mut out);
+        }
+    }
+    out
+}
+
+/// The exporter of Unreal Header Tool that writes the engine's reflection data, and the
+/// project of Unreal Build Tool that builds it, with `{Module}` for the module's name.
+const EXPORTER: &str = include_str!("../exporter/FerrealExporter.cs");
+const EXPORTER_PROJECT: &str = include_str!("../exporter/Exporter.ubtplugin.csproj");
+
+/// Writes the Ferreal exporter beside the Unreal module, in its plugin
+/// (`<module>/../<Module>Exporter`): Unreal Build Tool builds it with the project, and Unreal
+/// Header Tool runs it, writing `<Project>/Intermediate/Ferreal/FerrealEngine.json`. Named
+/// after the module, so the copies of several plugins can be built together.
+fn write_exporter(module_dir: &Path, name: &str) -> std::io::Result<()> {
+    let dir = module_dir.join("..").join(format!("{name}Exporter"));
+    write_if_changed(&dir.join("FerrealExporter.cs"), EXPORTER)?;
+    write_if_changed(
+        &dir.join("ExporterModule.cs"),
+        &format!(
+            "// Written by ferreal-build: the module this copy of the exporter is named after.\n\n\
+             namespace Ferreal;\n\n\
+             internal static class ExporterModule\n{{\n\tpublic const string Name = \"{name}\";\n}}\n"
+        ),
+    )?;
+    write_if_changed(
+        &dir.join(format!("{name}Exporter.ubtplugin.csproj")),
+        &EXPORTER_PROJECT.replace("{Module}", name),
+    )
+}
+
 fn write_if_changed(path: &Path, contents: &str) -> std::io::Result<()> {
     if std::fs::read(path).is_ok_and(|old| old == contents.as_bytes()) {
         return Ok(());
@@ -746,6 +1015,154 @@ fn write_if_changed(path: &Path, contents: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(path, contents)
+}
+
+/// Writes `files` under `dir` when the crate lacks the reflection data its engine bindings
+/// need (`files` has none): Ferreal's exporter builds it again later in the Unreal build, with
+/// the data, before the C++ compiles, and writes the bindings into the same files (which files
+/// there are does not depend on the data). So nothing is removed: Unreal Build Tool compiles
+/// the sources it listed before the exporter ran.
+fn write_provisional(dir: &Path, files: &[GeneratedFile]) -> std::io::Result<()> {
+    for f in files {
+        let path = dir.join(&f.path);
+        // A header the last build wrote with the data includes the engine's headers, which
+        // this one only declares ahead: it stays.
+        if f.path.starts_with("Public/")
+            && std::fs::read_to_string(&path).is_ok_and(|o| same_but_includes(&o, &f.contents))
+        {
+            continue;
+        }
+        write_if_changed(&path, &f.contents)?;
+    }
+    Ok(())
+}
+
+/// The modules the module depends on (`Private/Ferreal/`), one a line, which its Build.cs
+/// reads.
+const MODULES_FILE: &str = "Private/Ferreal/FerrealModules.txt";
+
+/// Whether two versions of a header differ only in what they include and declare ahead
+/// (`class AActor;`), and blank lines: what Unreal Header Tool does not read.
+fn same_but_includes(a: &str, b: &str) -> bool {
+    fn kept(text: &str) -> impl Iterator<Item = &str> {
+        text.lines().map(str::trim).filter(|l| {
+            !l.is_empty()
+                && !l.starts_with("#include ")
+                && !(l.starts_with("class ")
+                    && l.ends_with(';')
+                    && l.split_whitespace().count() == 2)
+        })
+    }
+    kept(a).eq(kept(b))
+}
+
+/// Adds `plugins` to the `Plugins` of the `.uplugin` of the module at `module_dir` (its
+/// plugin's, `<Plugin>/Source/<Module>`) that it does not list, but its own; none without one
+/// (a game's module). Leaves the rest of the file as it is. Returns those added.
+fn add_plugin_dependencies(module_dir: &Path, plugins: &[String]) -> Result<Vec<String>, String> {
+    let root = module_dir.join("..").join("..");
+    let Some(descriptor) = std::fs::read_dir(&root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "uplugin"))
+    else {
+        return Ok(Vec::new());
+    };
+    let at = |e: &dyn std::fmt::Display| format!("{}: {e}", descriptor.display());
+    let own = descriptor
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut text = std::fs::read_to_string(&descriptor).map_err(|e| at(&e))?;
+    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| at(&e))?;
+    let listed: Vec<&str> = json["Plugins"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p["Name"].as_str())
+        .collect();
+    let mut missing: Vec<String> = Vec::new();
+    for p in plugins {
+        if *p != own && !listed.contains(&p.as_str()) && !missing.contains(p) {
+            missing.push(p.clone());
+        }
+    }
+    if missing.is_empty() {
+        return Ok(missing);
+    }
+    let entries = missing
+        .iter()
+        .map(|n| format!("\t\t{{\n\t\t\t\"Name\": \"{n}\",\n\t\t\t\"Enabled\": true\n\t\t}}"))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let key = text.find("\"Plugins\"");
+    match key.and_then(|k| text[k..].find('[').map(|o| k + o)) {
+        Some(open) => {
+            let empty = text[open + 1..].trim_start().starts_with(']');
+            let insert = if empty {
+                format!("\n{entries}\n\t")
+            } else {
+                format!("\n{entries},")
+            };
+            text.insert_str(open + 1, &insert);
+        }
+        None => {
+            let close = text.rfind('}').ok_or_else(|| at(&"not a JSON object"))?;
+            let last = text[..close].trim_end().len();
+            text.insert_str(last, &format!(",\n\t\"Plugins\": [\n{entries}\n\t]"));
+        }
+    }
+    serde_json::from_str::<serde_json::Value>(&text).map_err(|e| at(&e))?;
+    std::fs::write(&descriptor, text).map_err(|e| at(&e))?;
+    Ok(missing)
+}
+
+/// Writes `files` under `dir` from Ferreal's exporter, in the middle of an Unreal build:
+/// Unreal Header Tool has read the headers, and Unreal Build Tool has listed the sources it
+/// compiles. So nothing is removed, and a header that changes or a source that is new fails
+/// the build (written all the same, for the next), as does a dependency on a module of a
+/// plugin (of `plugin_modules`) new to the modules the Build.cs read: the engine's own come
+/// with its Engine module.
+fn write_deferred(
+    dir: &Path,
+    files: &[GeneratedFile],
+    plugin_modules: &[String],
+) -> Result<(), Error> {
+    let mut late = Vec::new();
+    for f in files {
+        let path = dir.join(&f.path);
+        let old = std::fs::read_to_string(&path).ok();
+        if old.as_deref() == Some(f.contents.as_str()) {
+            continue;
+        }
+        // A header may change in what it includes (Unreal Header Tool does not read that),
+        // not in what it declares.
+        let header_late = f.path.starts_with("Public/")
+            && !old
+                .as_deref()
+                .is_some_and(|o| same_but_includes(o, &f.contents));
+        let modules_late = f.path == MODULES_FILE
+            && plugin_modules.iter().any(|m| {
+                !old.as_deref()
+                    .is_some_and(|o| o.lines().any(|l| l.trim() == m))
+            });
+        if (old.is_none() && f.path != MODULES_FILE) || header_late || modules_late {
+            late.push(f.path.clone());
+        }
+        write_if_changed(&path, &f.contents)
+            .map_err(|e| Error(vec![format!("{}: {e}", path.display())]))?;
+    }
+    if late.is_empty() {
+        Ok(())
+    } else {
+        Err(Error(vec![format!(
+            "{}: {} changed with the reflection data Unreal just exported, after this build read the module: build again",
+            dir.display(),
+            late.join(", ")
+        )]))
+    }
 }
 
 /// Writes `files` under `dir`, only those that changed, and removes the other files of the
@@ -774,4 +1191,74 @@ pub fn write_files(dir: &Path, files: &[GeneratedFile]) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn headers_differing_in_includes() {
+        let ahead = "#pragma once\n#include \"CoreMinimal.h\"\nclass AActor;\n\nUCLASS()\nclass UThing : public UObject\n{\n};\n";
+        let included = "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\nUCLASS()\nclass UThing : public UObject\n{\n};\n";
+        assert!(same_but_includes(ahead, included));
+        assert!(!same_but_includes(
+            ahead,
+            &included.replace("UThing", "UOther")
+        ));
+    }
+
+    #[test]
+    fn plugin_dependencies() {
+        let dir = std::env::temp_dir().join(format!("ferreal-uplugin-{}", std::process::id()));
+        let module = dir.join("Source").join("Mine");
+        std::fs::create_dir_all(&module).unwrap();
+        let descriptor = dir.join("Mine.uplugin");
+        let plugins = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let listed = |path: &Path| -> Vec<String> {
+            let json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            json["Plugins"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["Name"].as_str().unwrap().to_string())
+                .collect()
+        };
+
+        // No Plugins yet: the key is added; its own plugin is not.
+        std::fs::write(
+            &descriptor,
+            "{\n\t\"FileVersion\": 3,\n\t\"Modules\": []\n}\n",
+        )
+        .unwrap();
+        let added = add_plugin_dependencies(&module, &plugins(&["EnhancedInput", "Mine"])).unwrap();
+        assert_eq!(added, ["EnhancedInput"]);
+        assert_eq!(listed(&descriptor), ["EnhancedInput"]);
+
+        // Listed ones stay; others go first in the list.
+        let added =
+            add_plugin_dependencies(&module, &plugins(&["EnhancedInput", "Niagara"])).unwrap();
+        assert_eq!(added, ["Niagara"]);
+        assert_eq!(listed(&descriptor), ["Niagara", "EnhancedInput"]);
+        assert!(
+            add_plugin_dependencies(&module, &plugins(&["Niagara"]))
+                .unwrap()
+                .is_empty()
+        );
+
+        // An empty list.
+        std::fs::write(&descriptor, "{\n\t\"Plugins\": []\n}\n").unwrap();
+        add_plugin_dependencies(&module, &plugins(&["Niagara"])).unwrap();
+        assert_eq!(listed(&descriptor), ["Niagara"]);
+
+        // A game's module, without a .uplugin.
+        std::fs::remove_file(&descriptor).unwrap();
+        assert!(
+            add_plugin_dependencies(&module, &plugins(&["Niagara"]))
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

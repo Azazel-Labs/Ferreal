@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Runs the Ferreal exporter (unreal/Ferreal/Source/FerrealExporter) over a made-up session of
+  <!-- Runs the Ferreal exporter (ferreal-build/exporter) over a made-up session of
        Unreal Header Tool (Fixture.cs), against a stand-in for UHT's API (UhtStub.cs): it
        checks the exporter compiles, and writes the reflection data the mock engine test
        reads (../mock-ue/FerrealEngine.json). `cargo xtask exporter` runs it. -->
@@ -14,6 +14,6 @@
   <ItemGroup>
     <Compile Include="UhtStub.cs" />
     <Compile Include="Fixture.cs" />
-    <Compile Include="../../unreal/Ferreal/Source/FerrealExporter/FerrealExporter.cs" />
+    <Compile Include="../../ferreal-build/exporter/FerrealExporter.cs" />
   </ItemGroup>
 </Project>

@@ -386,7 +386,7 @@ int main()
 	// Engine structs copied to Rust (FHitResult field by field, FTransform through its accessors).
 	EXPECT(ToUtf8(Ferreal::HelloRust::Hit(Actor, Component)) == "blocking=true time=0.5 z=3 component=true actor=true bone=Spine scale=2 turn=0.5 later=1.5 Spine moved=13 next=2");
 	// Outputs: an FHitResult the engine fills, an FVector it reads and changes.
-	EXPECT(ToUtf8(Ferreal::HelloRust::Sweep(Actor)) == "moved=true swept=0.25 actor=true x=0.600");
+	EXPECT(ToUtf8(Ferreal::HelloRust::Sweep(Actor)) == "moved=true swept=0.25 actor=true x=0.600 shared=true");
 	// Arrays: of strings returned and passed, of objects passed with an FHitResult out.
 	EXPECT(ToUtf8(Ferreal::HelloRust::Trace(Actor)) == "parts=[\"a\", \"b\", \"c\"] joined=x+y hit=true z=-100 actor=true ignored=false");
 	// Core types (NoExport), mapped to Ferreal's own.

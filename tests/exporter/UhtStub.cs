@@ -4,6 +4,7 @@
 using System.Text;
 namespace EpicGames.Core
 {
+	public class UHTManifest { public class Module { public string BaseDirectory = ""; } }
 	[Flags] public enum EClassFlags : uint { None = 0, Abstract = 1, Deprecated = 2 }
 	[Flags] public enum EFunctionFlags : uint { None = 0, Static = 1, Const = 2, BlueprintCallable = 4, BlueprintPure = 8, BlueprintEvent = 16, Protected = 32, Private = 64, Net = 128, NetRequest = 256, NetResponse = 512, Delegate = 1024, Native = 2048, EditorOnly = 4096, Public = 8192 }
 	[Flags] public enum EPropertyFlags : ulong { None = 0, OutParm = 1, ConstParm = 2, ReferenceParm = 4, Deprecated = 0x20000000, EditorOnly = 0x800000000, NativeAccessSpecifierPublic = 0x0010000000000000, NativeAccessSpecifierProtected = 0x0020000000000000, NativeAccessSpecifierPrivate = 0x0040000000000000 }
@@ -61,15 +62,19 @@ namespace EpicGames.UHT.Types
 	public enum UhtEnumCppForm { Regular, Namespaced, EnumClass }
 	public class UhtEnum : UhtType { public UhtEnumCppForm CppForm; public string CppType = ""; public string FullyQualifiedCppType => CppType; public UhtEnumUnderlyingType UnderlyingType; public List<UhtEnumValue> EnumValues = new(); }
 	public class UhtHeaderFile { public List<UhtType> Children = new(); public string IncludeFilePath; public string ModuleRelativeFilePath; }
-	public class UhtModule { public string ShortName = ""; public List<UhtHeaderFile> Headers = new(); }
-	public class UhtSession { public List<UhtModule> Modules = new(); }
+	public class UhtModule { public string ShortName = ""; public List<UhtHeaderFile> Headers = new(); public EpicGames.Core.UHTManifest.Module Module = new(); }
+	public class UhtSession { public List<UhtModule> Modules = new(); public string ProjectDirectory = ""; }
 }
 namespace EpicGames.UHT.Utils
 {
 	public interface IUhtExportFactory
 	{
 		EpicGames.UHT.Types.UhtSession Session { get; }
-		string MakePath(string name, string extension);
-		void CommitOutput(string path, StringBuilder contents);
 	}
+	public class UhtException(string message) : Exception(message) { }
+}
+namespace Ferreal
+{
+	// ferreal-build writes this into each plugin's copy of the exporter.
+	internal static class ExporterModule { public const string Name = "HelloRust"; }
 }

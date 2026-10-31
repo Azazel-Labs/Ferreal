@@ -11,14 +11,6 @@ namespace Ferreal.Tests;
 
 public static class Fixture
 {
-	private sealed class Factory(UhtSession session) : IUhtExportFactory
-	{
-		public UhtSession Session { get; } = session;
-		public string Output = "";
-		public string MakePath(string name, string extension) => name + extension;
-		public void CommitOutput(string path, StringBuilder contents) => Output = contents.ToString();
-	}
-
 	private static T Prop<T>(string name, EPropertyFlags flags = EPropertyFlags.None) where T : UhtProperty, new()
 		=> new T { SourceName = name, EngineName = name, PropertyFlags = flags };
 
@@ -241,7 +233,7 @@ public static class Fixture
 			h.Children.AddRange(types);
 			return h;
 		}
-		var session = new UhtSession();
+		var session = new UhtSession { ProjectDirectory = "Project" };
 		session.Modules.Add(new UhtModule { ShortName = "CoreUObject", Headers = [Header("UObject/Object.h", obj), Header("UObject/NoExportTypes.h", vector, quat, transform)] });
 		session.Modules.Add(new UhtModule
 		{
@@ -266,9 +258,7 @@ public static class Fixture
 		});
 		session.Modules.Add(new UhtModule { ShortName = "HelloRust", Headers = [Header("Ferreal/Greeter.h", greeter)] });
 
-		var factory = new Factory(session);
-		FerrealExporter.Export(factory);
-		File.WriteAllText(args.Length > 0 ? args[0] : "FerrealEngine.json", factory.Output);
+		File.WriteAllText(args.Length > 0 ? args[0] : "FerrealEngine.json", FerrealExporter.Json(session));
 		return 0;
 	}
 }

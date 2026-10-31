@@ -54,7 +54,7 @@ bool FFerrealHelloTest::RunTest(const FString& Parameters)
 	// Outputs: an FHitResult the engine fills (no hit: its defaults), an FVector changed.
 	const FString Sweep = Ferreal::HelloRust::Sweep(Actor);
 	AddInfo(TEXT("Sweep: ") + Sweep);
-	TestEqual(TEXT("Sweep"), Sweep, FString(TEXT("moved=true swept=1 actor=false x=0.600")));
+	TestEqual(TEXT("Sweep"), Sweep, FString(TEXT("moved=true swept=1 actor=false x=0.600 shared=false")));
 	TestEqual(TEXT("Sweep moved the actor"), Actor->GetActorLocation().Z, 7.0, 1e-6);
 
 	// Core types (NoExport), mapped to Ferreal's own.

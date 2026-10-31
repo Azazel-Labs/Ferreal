@@ -36,7 +36,7 @@
 //! Engine classes are bound on demand: `ferreal::engine!(AActor, UGameplayStatics);` names the
 //! classes a crate calls, and `ferreal-build` generates their reflected functions as typed
 //! Rust (an `<Class>Api` trait per class, in the crate's `engine` module) from the reflection
-//! data Unreal Header Tool exports (the Ferreal plugin's exporter). Each call fills a C++
+//! data Unreal Header Tool exports (through Ferreal's exporter). Each call fills a C++
 //! struct of its parameters and goes through `ProcessEvent`; the struct is checked against
 //! the engine's reflection the first time.
 //!
@@ -50,7 +50,8 @@ mod obj;
 mod types;
 
 pub use ferreal_macros::{
-    cpp, cpp_base, cpp_include, engine, engine_class, export, module, uclass, uclass_impl, uenum,
+    cpp, cpp_base, cpp_include, engine, engine_class, engine_types, export, module, uclass,
+    uclass_impl, uenum,
 };
 pub use obj::{AsObject, Class, ClassOf, Derives, IsA, Obj, obj_from_ffi, objs_from_ffi};
 pub use types::{

@@ -69,6 +69,42 @@ impl Vector3 {
     pub const fn new(x: f64, y: f64, z: f64) -> Self {
         Vector3 { x, y, z }
     }
+
+    pub fn length(self) -> f64 {
+        self.dot(self).sqrt()
+    }
+
+    pub fn dot(self, other: Vector3) -> f64 {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
+
+    pub fn distance(self, other: Vector3) -> f64 {
+        (self - other).length()
+    }
+}
+
+impl std::ops::Add for Vector3 {
+    type Output = Vector3;
+
+    fn add(self, o: Vector3) -> Vector3 {
+        Vector3::new(self.x + o.x, self.y + o.y, self.z + o.z)
+    }
+}
+
+impl std::ops::Sub for Vector3 {
+    type Output = Vector3;
+
+    fn sub(self, o: Vector3) -> Vector3 {
+        Vector3::new(self.x - o.x, self.y - o.y, self.z - o.z)
+    }
+}
+
+impl std::ops::Mul<f64> for Vector3 {
+    type Output = Vector3;
+
+    fn mul(self, s: f64) -> Vector3 {
+        Vector3::new(self.x * s, self.y * s, self.z * s)
+    }
 }
 
 /// `FRotator`: pitch, yaw and roll in degrees, doubles.
