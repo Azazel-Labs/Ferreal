@@ -9,7 +9,7 @@ exclude = ["examples/UnrealGame/Plugins/FerrealSample/Rust"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-license = "MIT"
+license = "MIT-0"
 
 [workspace.dependencies]
 ferreal = { path = "ferreal", version = "0.1.0" }
